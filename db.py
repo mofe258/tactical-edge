@@ -1,3 +1,8 @@
+"""
+db.py — Persistence Layer & Settlement Engine
+Supports exact single-day filtering so matches from different days never mix.
+"""
+
 import sqlite3
 import json
 from datetime import datetime
@@ -162,11 +167,17 @@ def save_or_update_prediction(match_data):
         conn.close()
 
 
-def get_predictions_filtered(min_date=None, competition=None, status=None, market_cat=None, search_query=None):
+def get_predictions_filtered(exact_date=None, min_date=None, competition=None, status=None, market_cat=None, search_query=None):
+    """
+    Retrieves predictions. Supports exact_date to strictly enforce single-day tickets.
+    """
     query = "SELECT * FROM predictions WHERE 1=1"
     params = []
 
-    if min_date:
+    if exact_date:
+        query += " AND match_date = ?"
+        params.append(exact_date)
+    elif min_date:
         query += " AND match_date >= ?"
         params.append(min_date)
 
@@ -193,7 +204,7 @@ def get_predictions_filtered(min_date=None, competition=None, status=None, marke
         term = f"%{search_query.strip()}%"
         params.extend([term, term, term])
 
-    query += " ORDER BY match_date ASC, kickoff_time ASC, (confidence * est_odds) DESC"
+    query += " ORDER BY kickoff_time ASC, (confidence * est_odds) DESC"
     return execute_db(query, params, fetchall=True) or []
 
 
