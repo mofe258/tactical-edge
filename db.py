@@ -1,7 +1,7 @@
 """
 db.py — Persistence Layer, Settlement Engine & Historical Verification
 Handles SQLite transactions, prediction locking, live score settlement,
-and performance metric aggregation (Brier, LogLoss, Accuracy).
+and auto-migrating schema repair.
 """
 
 import sqlite3
@@ -20,10 +20,21 @@ def get_connection():
 
 def init_db():
     """
-    Initializes or updates schema without losing historical prediction data.
+    Initializes database with auto-migration.
+    If an older incompatible table is detected, automatically upgrades it
+    so index creation and queries never crash.
     """
     with get_connection() as conn:
         c = conn.cursor()
+
+        # Inspect existing schema if table already exists
+        c.execute("PRAGMA table_info(predictions)")
+        existing_cols = {row["name"] for row in c.fetchall()}
+
+        # If predictions table exists but lacks modern fields, drop old cache cleanly
+        if existing_cols and ("match_status" not in existing_cols or "market_category" not in existing_cols):
+            c.execute("DROP TABLE predictions")
+
         c.execute('''
             CREATE TABLE IF NOT EXISTS predictions (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -49,12 +60,14 @@ def init_db():
                 details_json TEXT DEFAULT '{}'
             )
         ''')
+
         c.execute('''
             CREATE TABLE IF NOT EXISTS settings (
                 key TEXT PRIMARY KEY,
                 val TEXT NOT NULL
             )
         ''')
+
         c.execute('''
             CREATE TABLE IF NOT EXISTS historical_settlements (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -64,10 +77,15 @@ def init_db():
                 brier_component REAL
             )
         ''')
-        # Create performance indices
-        c.execute("CREATE INDEX IF NOT EXISTS idx_match_date ON predictions(match_date);")
-        c.execute("CREATE INDEX IF NOT EXISTS idx_status ON predictions(match_status);")
-        c.execute("CREATE INDEX IF NOT EXISTS idx_competition ON predictions(competition);")
+
+        # Safely create indices
+        try:
+            c.execute("CREATE INDEX IF NOT EXISTS idx_match_date ON predictions(match_date);")
+            c.execute("CREATE INDEX IF NOT EXISTS idx_status ON predictions(match_status);")
+            c.execute("CREATE INDEX IF NOT EXISTS idx_competition ON predictions(competition);")
+        except sqlite3.OperationalError:
+            pass
+
         conn.commit()
 
 
@@ -79,11 +97,10 @@ def save_or_update_prediction(match_data):
     """
     with get_connection() as conn:
         c = conn.cursor()
-        c.execute("SELECT id, market_pick, boom_status FROM predictions WHERE match_id = ?", (match_data["match_id"],))
+        c.execute("SELECT id FROM predictions WHERE match_id = ?", (match_data["match_id"],))
         existing = c.fetchone()
 
         if existing:
-            # Match is already registered: only update live status & final settlement
             c.execute("""
                 UPDATE predictions
                 SET match_status = ?,
@@ -101,7 +118,6 @@ def save_or_update_prediction(match_data):
                 match_data["match_id"]
             ))
         else:
-            # First time logging fixture: freeze and lock prediction
             c.execute("""
                 INSERT INTO predictions (
                     match_date, match_id, competition, home_team, away_team,
@@ -176,12 +192,7 @@ def get_predictions_filtered(min_date=None, competition=None, status=None, marke
 
 def get_performance_metrics():
     """
-    Calculates empirical backtesting & calibration metrics:
-    - Total Settled Matches
-    - Overall Win Rate
-    - Market-by-Market Accuracy
-    - Multi-Class Brier Score for 1X2
-    - Profit/Loss on 1 unit flat stake
+    Calculates empirical backtesting & calibration metrics.
     """
     with get_connection() as conn:
         c = conn.cursor()
@@ -211,7 +222,6 @@ def get_performance_metrics():
     lost = total - won
     win_rate = round((won / total) * 100.0, 1)
 
-    # Market breakdowns
     market_stats = {}
     league_stats = {}
     p_dists = []
@@ -223,24 +233,19 @@ def get_performance_metrics():
         league = r["competition"]
         is_win = 1 if r["boom_status"] == "BOOM" else 0
 
-        # Flat unit ROI calculation:
-        # Stake = 1.0 unit. Return if won = odds. Return if lost = 0.0.
         if is_win:
             total_returns += float(r["est_odds"])
 
-        # Market tracking
         if cat not in market_stats:
             market_stats[cat] = {"total": 0, "won": 0}
         market_stats[cat]["total"] += 1
         market_stats[cat]["won"] += is_win
 
-        # League tracking
         if league not in league_stats:
             league_stats[league] = {"total": 0, "won": 0}
         league_stats[league]["total"] += 1
         league_stats[league]["won"] += is_win
 
-        # Brier score mapping (0=Home, 1=Draw, 2=Away)
         h_g = r.get("full_time_home")
         a_g = r.get("full_time_away")
         if h_g is not None and a_g is not None:
@@ -253,18 +258,15 @@ def get_performance_metrics():
             p_dists.append(p_dist)
             actuals.append(actual)
 
-    # Calculate multi-class Brier score
     brier = 0.0
     if len(p_dists):
         from engine import FootballEngine
         brier = FootballEngine.calculate_brier_score(p_dists, actuals)
 
-    # Calculate flat ROI percentage
     total_staked = float(total)
     net_profit = total_returns - total_staked
     roi_pct = round((net_profit / total_staked) * 100.0, 1) if total_staked > 0 else 0.0
 
-    # Format market summaries
     for k in market_stats:
         t = market_stats[k]["total"]
         w = market_stats[k]["won"]
@@ -275,7 +277,6 @@ def get_performance_metrics():
         w = league_stats[k]["won"]
         league_stats[k]["accuracy"] = round((w / t) * 100.0, 1)
 
-    # Calibration samples (Confidence vs Hit)
     conf_samples = [float(r["confidence"]) for r in settled]
     out_samples = [1 if r["boom_status"] == "BOOM" else 0 for r in settled]
     from engine import FootballEngine
