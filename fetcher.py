@@ -1,26 +1,36 @@
 import requests
+from datetime import datetime, timedelta
 
 BASE_URL = "https://api.football-data.org/v4"
 
-def fetch_daily_fixtures(api_key, match_date):
-    """Fetches matches for the selected date with error handling."""
+def fetch_upcoming_fixtures(api_key, start_date_str, days_ahead=7):
+    """
+    Fetches matches across a multi-day window (default next 7 days)
+    so you always have upcoming games to stake on.
+    """
     headers = {"X-Auth-Token": api_key.strip()}
-    url = f"{BASE_URL}/matches?dateFrom={match_date}&dateTo={match_date}"
+    
+    start_dt = datetime.strptime(start_date_str, "%Y-%m-%d")
+    end_dt = start_dt + timedelta(days=days_ahead)
+    end_date_str = end_dt.strftime("%Y-%m-%d")
+
+    url = f"{BASE_URL}/matches?dateFrom={start_date_str}&dateTo={end_date_str}"
+    
     try:
-        res = requests.get(url, headers=headers, timeout=10)
+        res = requests.get(url, headers=headers, timeout=12)
         if res.status_code == 200:
             return res.json().get("matches", []), None
         elif res.status_code == 403:
-            return [], "API Key Error: Invalid or inactive API key. (Wait 5-10 mins if just registered)."
+            return [], "API Key Error: Invalid or inactive API key."
         elif res.status_code == 429:
-            return [], "Rate limit reached: Maximum 10 requests per minute on free tier."
+            return [], "Rate limit reached: Free plan allows 10 calls per minute."
         else:
             return [], f"API returned status code: {res.status_code}"
     except Exception as e:
-        return [], f"Network error: {str(e)}"
+        return [], f"Connection error: {str(e)}"
 
 def fetch_standings(api_key, competition_code):
-    """Fetches league standings to calculate goal metrics."""
+    """Fetches league standings to calculate attack and defense metrics."""
     headers = {"X-Auth-Token": api_key.strip()}
     url = f"{BASE_URL}/competitions/{competition_code}/standings"
     try:
