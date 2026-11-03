@@ -7,7 +7,7 @@ from scipy.stats import poisson
 import fetcher
 
 st.set_page_config(
-    page_title="Tactical Edge | SportyBet Live Boom Suite",
+    page_title="Tactical Edge | Elite League & Boom Suite",
     page_icon="⚡",
     layout="wide",
     initial_sidebar_state="collapsed"
@@ -15,7 +15,7 @@ st.set_page_config(
 
 # ----------------- DATABASE CONFIG & AUTO-PURGE -----------------
 DB_NAME = "predictions.db"
-ENGINE_VERSION = "v12_live_score_and_green_boom"
+ENGINE_VERSION = "v13_top_league_elite_giants"
 
 def init_db():
     conn = sqlite3.connect(DB_NAME)
@@ -72,7 +72,6 @@ def save_or_update_prediction(match_date, match_id, comp, home, away, category, 
     conn = sqlite3.connect(DB_NAME)
     c = conn.cursor()
     try:
-        # PRESERVATION LOCK: If match exists, ONLY update live score & boom status. NEVER overwrite pick!
         c.execute("SELECT id FROM predictions WHERE match_id = ?", (match_id,))
         existing = c.fetchone()
         if existing:
@@ -108,26 +107,23 @@ def get_upcoming_predictions(start_date):
 
 init_db()
 
-# Auto-wipe cache when engine version updates
 if get_setting("engine_version") != ENGINE_VERSION:
     clear_all()
     set_setting("engine_version", ENGINE_VERSION)
 
-# ----------------- BOOM CHECKER (FROZEN PREDICTIONS) -----------------
+# ----------------- BOOM CHECKER -----------------
 def evaluate_boom(pick, status, h_goals, a_goals, ht_h, ht_a):
-    """Checks whether the locked prediction has successfully boomed."""
     if h_goals is None or a_goals is None:
         return "PENDING"
     
     tot = h_goals + a_goals
     is_finished = status in ['FINISHED', 'FT']
 
-    # 1. Combos
     if "Home & Over 1.5" in pick:
         if is_finished:
             return "BOOM" if (h_goals > a_goals and tot >= 2) else "LOST"
         if h_goals > a_goals and tot >= 2:
-            return "BOOM"  # Early boom
+            return "BOOM"
         return "LIVE"
 
     if "Away & Over 1.5" in pick:
@@ -142,7 +138,6 @@ def evaluate_boom(pick, status, h_goals, a_goals, ht_h, ht_a):
             return "BOOM" if (h_goals > a_goals and tot >= 3) else "LOST"
         return "LIVE"
 
-    # 2. Handicaps
     if "Away (0:3)" in pick:
         if is_finished:
             return "BOOM" if (h_goals - a_goals) < 3 else "LOST"
@@ -153,7 +148,6 @@ def evaluate_boom(pick, status, h_goals, a_goals, ht_h, ht_a):
             return "BOOM" if (h_goals - a_goals) < 4 else "LOST"
         return "LIVE"
 
-    # 3. 1st Half Goals
     if "1st Half Over 1.5" in pick:
         if ht_h is not None and ht_a is not None:
             return "BOOM" if (ht_h + ht_a) >= 2 else ("LOST" if is_finished else "PENDING")
@@ -161,7 +155,6 @@ def evaluate_boom(pick, status, h_goals, a_goals, ht_h, ht_a):
             return "BOOM"
         return "LIVE"
 
-    # 4. Team Totals
     if "Over 2.5" in pick:
         if h_goals >= 3:
             return "BOOM"
@@ -169,7 +162,6 @@ def evaluate_boom(pick, status, h_goals, a_goals, ht_h, ht_a):
             return "LOST"
         return "LIVE"
 
-    # 5. Double Chance
     if "Draw or Away" in pick:
         if is_finished:
             return "BOOM" if a_goals >= h_goals else "LOST"
@@ -180,7 +172,6 @@ def evaluate_boom(pick, status, h_goals, a_goals, ht_h, ht_a):
             return "BOOM" if h_goals >= a_goals else "LOST"
         return "LIVE"
 
-    # 6. Under 4.5
     if "Under 4.5" in pick:
         if tot >= 5:
             return "LOST"
@@ -188,7 +179,6 @@ def evaluate_boom(pick, status, h_goals, a_goals, ht_h, ht_a):
             return "BOOM" if tot <= 4 else "LOST"
         return "LIVE"
 
-    # 7. 1X2
     if pick == "Home":
         if is_finished:
             return "BOOM" if h_goals > a_goals else "LOST"
@@ -239,43 +229,34 @@ class SportyBetBlueprintEngine:
 
         candidates = []
 
-        # 1. 1st Half Blitz
         if total_xg >= 3.2 and ht_o15 >= 0.50 and assigned_categories.get("1ST_HALF", 0) < 1:
             candidates.append({"cat": "1st Half - Over/Under", "pick": "Over 1.5", "prob": ht_o15, "odds": 1.55, "tag": "⚡ 1st Half Blitz", "key": "1ST_HALF"})
 
-        # 2. Team Over 2.5
         if home_xg >= 2.3 and home_o25 >= 0.52 and assigned_categories.get("TEAM_TOTAL", 0) < 1:
             candidates.append({"cat": f"{home_team} Over/Under", "pick": "Over 2.5", "prob": home_o25, "odds": 1.29, "tag": "👑 Elite Home Giant", "key": "TEAM_TOTAL"})
 
-        # 3. Home & Over 1.5
         if prob_home >= 0.65 and h_and_o15 >= 0.55 and assigned_categories.get("HOME_COMBO", 0) < 2:
             candidates.append({"cat": "1X2 & Over/Under 1.5", "pick": "Home & Over 1.5", "prob": h_and_o15, "odds": 1.68, "tag": "🔥 Home Attack Dominance", "key": "HOME_COMBO"})
 
-        # 4. Away & Over 1.5
         if prob_away >= 0.60 and a_and_o15 >= 0.52 and assigned_categories.get("AWAY_COMBO", 0) < 2:
             candidates.append({"cat": "1X2 & Over/Under 1.5", "pick": "Away & Over 1.5", "prob": a_and_o15, "odds": 1.26, "tag": "🚗 Dominant Away Trip", "key": "AWAY_COMBO"})
 
-        # 5. Home & Over 2.5
         if prob_home >= 0.68 and h_and_o25 >= 0.50 and assigned_categories.get("HOME_COMBO_25", 0) < 1:
             candidates.append({"cat": "1X2 & Over/Under 2.5", "pick": "Home & Over 2.5", "prob": h_and_o25, "odds": 1.32, "tag": "⚽ High-Scoring Home Win", "key": "HOME_COMBO_25"})
 
-        # 6. Handicaps
         if prob_home >= 0.62 and away_hcap_4 >= 0.94 and assigned_categories.get("HANDICAP", 0) < 2:
             candidates.append({"cat": "Handicap 0:4", "pick": "Away (0:4)", "prob": away_hcap_4, "odds": 1.22, "tag": "🎯 Deep Handicap Cushion", "key": "HANDICAP"})
         elif prob_home >= 0.58 and away_hcap_3 >= 0.88 and assigned_categories.get("HANDICAP", 0) < 2:
             candidates.append({"cat": "Handicap 0:3", "pick": "Away (0:3)", "prob": away_hcap_3, "odds": 1.16, "tag": "🎯 +3 Goal Safety Buffer", "key": "HANDICAP"})
 
-        # 7. Double Chance 1UP
         if prob_away >= 0.48 and dc_x2 >= 0.82 and assigned_categories.get("DC", 0) < 2:
             candidates.append({"cat": "Double Chance - 1UP", "pick": "Draw or Away", "prob": dc_x2, "odds": 1.09, "tag": "🛡️ Away Safety Insurance", "key": "DC"})
         elif prob_home >= 0.52 and dc_1x >= 0.85 and assigned_categories.get("DC", 0) < 2:
             candidates.append({"cat": "Double Chance - 1UP", "pick": "Home or Draw", "prob": dc_1x, "odds": 1.12, "tag": "🛡️ Home Safety Insurance", "key": "DC"})
 
-        # 8. High Defensive Cap
         if total_xg < 2.8 and u45 >= 0.86 and assigned_categories.get("UNDER_45", 0) < 1:
             candidates.append({"cat": "Over/Under", "pick": "Under 4.5", "prob": u45, "odds": 1.24, "tag": "🔒 Tactical Defense Cap", "key": "UNDER_45"})
 
-        # 9. Direct 1X2
         if 0.58 <= prob_home <= 0.72 and assigned_categories.get("1X2", 0) < 2:
             candidates.append({"cat": "1X2", "pick": "Home", "prob": prob_home, "odds": 1.77, "tag": "🏆 Resolute Home Winner", "key": "1X2"})
         elif 0.55 <= prob_away <= 0.72 and assigned_categories.get("1X2", 0) < 2:
@@ -292,14 +273,13 @@ class SportyBetBlueprintEngine:
         assigned_categories[chosen["key"]] = assigned_categories.get(chosen["key"], 0) + 1
         return chosen
 
-# ----------------- UI STYLES (WITH LIVE PULSE & BOOM GLOW) -----------------
+# ----------------- UI STYLES -----------------
 st.markdown("""
 <style>
     @import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;600;700;800&display=swap');
     html, body, [class*="css"] { font-family: 'Plus Jakarta Sans', sans-serif; }
     .stApp { background: radial-gradient(circle at 15% 20%, #0c1424 0%, #050811 100%); color: #e2e8f0; }
 
-    /* Standard Card */
     .glass-card {
         background: rgba(255, 255, 255, 0.03);
         backdrop-filter: blur(16px);
@@ -313,7 +293,6 @@ st.markdown("""
         transition: all 0.3s ease;
     }
 
-    /* 💥 BOOM WINNING CARD (Glowing Green!) */
     .card-boom {
         background: linear-gradient(135deg, rgba(16, 185, 129, 0.18) 0%, rgba(5, 150, 105, 0.08) 100%) !important;
         border: 1px solid #10b981 !important;
@@ -321,13 +300,11 @@ st.markdown("""
         box-shadow: 0 0 30px rgba(16, 185, 129, 0.35) !important;
     }
 
-    /* 🔴 LIVE MATCH CARD (Pulsing Red Border) */
     .card-live {
         border: 1px solid rgba(239, 68, 68, 0.6) !important;
         box-shadow: 0 0 20px rgba(239, 68, 68, 0.25) !important;
     }
 
-    /* BADGES */
     .badge-boom {
         display: inline-flex;
         align-items: center;
@@ -359,15 +336,8 @@ st.markdown("""
         animation: liveBlink 1.5s infinite;
     }
 
-    @keyframes liveBlink {
-        0%, 100% { opacity: 1; }
-        50% { opacity: 0.5; }
-    }
-
-    @keyframes boomPulse {
-        0%, 100% { transform: scale(1); }
-        50% { transform: scale(1.05); }
-    }
+    @keyframes liveBlink { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
+    @keyframes boomPulse { 0%, 100% { transform: scale(1); } 50% { transform: scale(1.05); } }
 
     .tag-prob { display: inline-block; padding: 4px 10px; background: rgba(56, 189, 248, 0.15); border: 1px solid rgba(56, 189, 248, 0.4); color: #38bdf8; border-radius: 8px; font-weight: 700; font-size: 0.85rem; }
     .tag-odds { display: inline-block; padding: 4px 10px; background: rgba(245, 158, 11, 0.15); border: 1px solid rgba(245, 158, 11, 0.4); color: #fbbf24; border-radius: 8px; font-weight: 700; font-size: 0.85rem; }
@@ -404,11 +374,7 @@ def run_auto_sync():
         ht_h = ht.get("home")
         ht_a = ht.get("away")
 
-        # Format Live or Final score string
-        if h_goals is not None and a_goals is not None:
-            score_str = f"{h_goals} - {a_goals}"
-        else:
-            score_str = "vs"
+        score_str = f"{h_goals} - {a_goals}" if (h_goals is not None and a_goals is not None) else "vs"
 
         if comp_code not in standings_cache:
             standings_cache[comp_code] = fetcher.fetch_standings(comp_code)
@@ -423,7 +389,6 @@ def run_auto_sync():
         h_xg, a_xg = engine.calculate_xg(h_stat["att_strength"], h_stat["def_strength"], a_stat["att_strength"], a_stat["def_strength"])
         res = engine.assign_tactical_market(h_xg, a_xg, h_team, a_team, assigned_categories)
 
-        # Check boom status based on locked pick and score
         boom_status = evaluate_boom(res["pick"], status, h_goals, a_goals, ht_h, ht_a)
 
         save_or_update_prediction(
@@ -445,10 +410,9 @@ if not records and fetcher.API_KEY != "PASTE_YOUR_API_KEY_HERE":
 st.markdown('<div class="brand-title">Tactical Predictive Suite</div>', unsafe_allow_html=True)
 st.markdown('<div style="color: #94a3b8; margin-bottom: 20px;">Modeled on authentic winning slips with <b>Live Match Tracking</b> and <b>Instant Boom Verification</b>.</div>', unsafe_allow_html=True)
 
-# Helper function to render match cards with live & boom styling
+# Helper function to render match cards
 def render_sporty_card(item):
     m_date, m_comp, m_home, m_away, m_cat, m_pick, m_conf, m_odds, m_lock, m_tag, m_status, m_score, m_boom = item[:13]
-    
     is_live = m_status in ['IN_PLAY', 'PAUSED']
     is_boom = m_boom == 'BOOM'
     
@@ -458,7 +422,6 @@ def render_sporty_card(item):
     elif is_live:
         card_class += " card-live"
 
-    # Status badge HTML
     if is_boom:
         status_badge = '<div class="badge-boom">💥 BOOM! WON</div>'
     elif is_live:
@@ -494,8 +457,17 @@ def render_sporty_card(item):
     </div>
     """
 
+# Keywords for Identifying Today's Elite Heavyweight Teams
+ELITE_KEYWORDS = [
+    "manchester city", "man city", "arsenal", "liverpool", "chelsea", "tottenham", "manchester united", "aston villa",
+    "real madrid", "barcelona", "atletico", "bayern", "dortmund", "leverkusen", "leipzig",
+    "inter", "milan", "juventus", "napoli", "roma", "paris saint-germain", "psg", "sporting", "benfica"
+]
+
 if records:
+    # 5 DEDICATED TABS WITH NEW ELITE FIELD AT FRONT
     main_tabs = st.tabs([
+        "👑 Top League Elite Matches (Premier League & UCL)",
         "🔥 Odds Tier Accumulator (3, 5, 10, 14–20, 100)",
         "🎯 Sure Banger Hits (Lock-In Singles)",
         "🛡️ Sure Fixtures (Detailed Staking Signals)",
@@ -503,9 +475,38 @@ if records:
     ])
 
     # =========================================================================
-    # TAB 1: ODDS TIER ACCUMULATOR
+    # TAB 0: 👑 TOP LEAGUE ELITE MATCHES (PREMIER LEAGUE & MARQUEE GIANTS)
     # =========================================================================
     with main_tabs[0]:
+        st.markdown("""
+        <div style="background: linear-gradient(135deg, rgba(245, 158, 11, 0.12) 0%, rgba(16, 185, 129, 0.06) 100%); border: 1px solid rgba(245, 158, 11, 0.4); border-radius: 18px; padding: 18px 24px; margin-bottom: 20px;">
+            <span style="background: #f59e0b; color: #000; padding: 4px 12px; border-radius: 50px; font-weight: 800; font-size: 0.75rem; text-transform: uppercase;">
+                👑 MARQUEE ELITE FIXTURES
+            </span>
+            <div style="font-size: 1.4rem; font-weight: 800; color: #fff; margin-top: 6px;">Today's Premier League & Powerhouse Club Matches</div>
+            <div style="color: #cbd5e1; font-size: 0.85rem;">Dedicated exclusively to predictions for Man City, Arsenal, Liverpool, Real Madrid, Bayern, and top-flight giants.</div>
+        </div>
+        """, unsafe_allow_html=True)
+
+        # Filter strictly for top leagues or elite clubs
+        elite_records = [
+            r for r in records 
+            if any(k in f"{r[2]} {r[3]}".lower() for k in ELITE_KEYWORDS) 
+            or r[1] in ["Premier League", "UEFA Champions League"]
+        ]
+
+        if elite_records:
+            e_cols = st.columns(2)
+            for idx, item in enumerate(elite_records):
+                with e_cols[idx % 2]:
+                    st.markdown(render_sporty_card(item), unsafe_allow_html=True)
+        else:
+            st.info("No Premier League or marquee powerhouse fixtures scheduled for today. Check upcoming matchdays!")
+
+    # =========================================================================
+    # TAB 1: ODDS TIER ACCUMULATOR
+    # =========================================================================
+    with main_tabs[1]:
         st.markdown("<p style='color: #94a3b8; font-size: 0.9rem;'>Select target odds. Match legs reflect real-time live score progress and green boom verification.</p>", unsafe_allow_html=True)
         tier = st.radio("Choose Target Odds:", ["3 Odds", "5 Odds", "10 Odds", "14–20 Odds (Boom Slip)", "100 Odds"], horizontal=True)
         target_dict = {"3 Odds": 3.0, "5 Odds": 5.0, "10 Odds": 10.0, "14–20 Odds (Boom Slip)": 14.32, "100 Odds": 100.0}
@@ -561,7 +562,7 @@ if records:
     # =========================================================================
     # TAB 2: SURE BANGER HITS
     # =========================================================================
-    with main_tabs[1]:
+    with main_tabs[2]:
         st.markdown("<p style='color: #94a3b8; font-size: 0.9rem;'>Dedicated to single lock-ins with live tracking and boom verification.</p>", unsafe_allow_html=True)
         b_cols = st.columns(2)
         for idx, item in enumerate(records[:6]):
@@ -571,7 +572,7 @@ if records:
     # =========================================================================
     # TAB 3: SURE FIXTURES
     # =========================================================================
-    with main_tabs[2]:
+    with main_tabs[3]:
         st.markdown("<p style='color: #94a3b8; font-size: 0.9rem;'>Detailed match cards with real-time status updates.</p>", unsafe_allow_html=True)
         s_cols = st.columns(2)
         for idx, item in enumerate(records[:10]):
@@ -581,7 +582,7 @@ if records:
     # =========================================================================
     # TAB 4: ALL MATCHES & MARKETS
     # =========================================================================
-    with main_tabs[3]:
+    with main_tabs[4]:
         search_query = st.text_input("🔍 Filter by Team or Competition", "")
         filtered = records
         if search_query:
