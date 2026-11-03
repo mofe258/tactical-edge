@@ -65,7 +65,11 @@ def set_setting(key, val):
 def get_setting(key, default=""):
     conn = sqlite3.connect(DB_NAME)
     c = conn.cursor()
-    c.execute("SELECT val FROM settings WHERE key = ?", (key,))
-    row = c.fetchone()
-    conn.close()
-    return row[0] if row else defaultq
+    try:
+        c.execute("SELECT val FROM settings WHERE key = ?", (key,))
+        row = c.fetchone()
+        return row[0] if row else default
+    except sqlite3.OperationalError:
+        return default
+    finally:
+        conn.close()
