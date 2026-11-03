@@ -1,7 +1,7 @@
 """
 app.py — TacticalEdge Platform
-Minimalist Football Intelligence Dashboard with team crests, expandable
-match analytics, transparent metric reporting, and verified data attribution.
+Institutional Football Intelligence Dashboard with kick-off times, evidence
+quality scores, team crests, and grounded statistical explanations.
 """
 
 import streamlit as st
@@ -23,7 +23,7 @@ st.set_page_config(
 
 db.init_db()
 
-# ----------------- REFINED MINIMALIST STYLING -----------------
+# ----------------- MINIMALIST PROFESSIONAL CSS -----------------
 st.markdown("""
 <style>
     @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
@@ -45,6 +45,8 @@ st.markdown("""
         padding-bottom: 16px;
         margin-bottom: 20px;
         border-bottom: 1px solid #1A2234;
+        flex-wrap: wrap;
+        gap: 12px;
     }
     .brand-title {
         font-size: 1.45rem;
@@ -56,9 +58,35 @@ st.markdown("""
         gap: 8px;
     }
     .brand-subtitle {
-        font-size: 0.82rem;
+        font-size: 0.80rem;
         color: #64748B;
         margin-top: 2px;
+    }
+
+    /* Live Data Freshness Badge */
+    .freshness-pill {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        background: #101626;
+        border: 1px solid #1A2234;
+        padding: 5px 12px;
+        border-radius: 20px;
+        font-size: 0.74rem;
+        color: #94A3B8;
+    }
+    .status-dot-green {
+        width: 8px;
+        height: 8px;
+        border-radius: 50%;
+        background-color: #10B981;
+        box-shadow: 0 0 8px #10B981;
+    }
+    .status-dot-amber {
+        width: 8px;
+        height: 8px;
+        border-radius: 50%;
+        background-color: #F59E0B;
     }
 
     /* KPI Summary Cards */
@@ -67,6 +95,7 @@ st.markdown("""
         border: 1px solid #1A2234;
         border-radius: 10px;
         padding: 14px 18px;
+        height: 100%;
     }
     .kpi-val {
         font-size: 1.65rem;
@@ -88,7 +117,7 @@ st.markdown("""
         margin-top: 4px;
     }
 
-    /* Refined Match Fixture Cards */
+    /* Match Fixture Cards */
     .match-card {
         background: #101626;
         border: 1px solid #1A2234;
@@ -147,6 +176,15 @@ st.markdown("""
         color: #10B981;
         border: 1px solid rgba(16, 185, 129, 0.3);
     }
+    .badge-evidence {
+        font-size: 0.68rem;
+        font-weight: 600;
+        padding: 2px 7px;
+        border-radius: 4px;
+        background: #182238;
+        color: #94A3B8;
+        border: 1px solid #232D42;
+    }
 
     /* Model Selection Box */
     .pick-box {
@@ -158,6 +196,8 @@ st.markdown("""
         justify-content: space-between;
         align-items: center;
         margin-top: 10px;
+        flex-wrap: wrap;
+        gap: 8px;
     }
     .pick-title {
         font-size: 0.95rem;
@@ -181,7 +221,7 @@ st.markdown("""
         font-weight: 700;
     }
 
-    /* Tab styling */
+    /* Navigation Tabs */
     .stTabs [data-baseweb="tab-list"] {
         gap: 6px;
         border-bottom: 1px solid #1A2234;
@@ -199,10 +239,25 @@ st.markdown("""
         color: #FFFFFF !important;
         background: #182238 !important;
     }
+
+    /* Mobile Responsive Optimizations */
+    @media (max-width: 768px) {
+        .top-bar {
+            flex-direction: column;
+            align-items: flex-start;
+        }
+        .match-card {
+            padding: 14px;
+        }
+        .team-name {
+            font-size: 0.95rem;
+        }
+    }
 </style>
 """, unsafe_allow_html=True)
 
 today_str = date.today().strftime("%Y-%m-%d")
+
 
 # ----------------- SYNCHRONIZATION PIPELINE -----------------
 def sync_pipeline():
@@ -220,7 +275,17 @@ def sync_pipeline():
             continue
 
         match_id = str(m["id"])
-        m_date = m.get("utcDate", "")[:10]
+        utc_datetime_str = m.get("utcDate", "")
+        m_date = utc_datetime_str[:10] if utc_datetime_str else today_str
+
+        # Parse kickoff time into UTC format
+        kickoff_time = "TBD"
+        if len(utc_datetime_str) >= 16:
+            try:
+                kickoff_time = utc_datetime_str[11:16] + " UTC"
+            except Exception:
+                pass
+
         status = m.get("status", "SCHEDULED")
         score = m.get("score", {})
         ft = score.get("fullTime", {})
@@ -234,18 +299,29 @@ def sync_pipeline():
         team_stats = standings_cache[comp_code]
         h_team = m["homeTeam"]["name"]
         a_team = m["awayTeam"]["name"]
+        h_id = str(m["homeTeam"]["id"])
+        a_id = str(m["awayTeam"]["id"])
         h_crest = m["homeTeam"].get("crest", "")
         a_crest = m["awayTeam"].get("crest", "")
 
-        h_stat = team_stats.get(h_team, {"att_strength": 1.0, "def_strength": 1.0, "played": 10})
-        a_stat = team_stats.get(a_team, {"att_strength": 1.0, "def_strength": 1.0, "played": 10})
+        # Look up by ID first, then name fallback to eliminate duplicate defaults
+        h_stat = team_stats.get(h_id) or team_stats.get(h_team) or {"att_strength": 1.05, "def_strength": 0.95, "played": 8}
+        a_stat = team_stats.get(a_id) or team_stats.get(a_team) or {"att_strength": 0.95, "def_strength": 1.05, "played": 8}
+
+        h_games = h_stat.get("played", 8)
+        a_games = a_stat.get("played", 8)
 
         h_xg, a_xg = engine.calculate_xg(
             h_stat["att_strength"], h_stat["def_strength"],
-            a_stat["att_strength"], a_stat["def_strength"]
+            a_stat["att_strength"], a_stat["def_strength"],
+            home_games=h_games,
+            away_games=a_games
         )
 
-        match_analysis = engine.predict_full_match(h_xg, a_xg, h_team, a_team)
+        match_analysis = engine.predict_full_match(
+            h_xg, a_xg, h_team, a_team,
+            home_games=h_games, away_games=a_games
+        )
         rec = match_analysis["recommendation"]
 
         # Settlement check
@@ -272,6 +348,7 @@ def sync_pipeline():
 
         db.save_or_update_prediction({
             "match_date": m_date,
+            "kickoff_time": kickoff_time,
             "match_id": match_id,
             "competition": m["competition"]["name"],
             "home_team": h_team,
@@ -283,6 +360,7 @@ def sync_pipeline():
             "confidence": rec["prob"],
             "est_odds": rec["odds"],
             "tactical_tag": f"{h_xg:.2f} vs {a_xg:.2f} xG",
+            "evidence_quality": match_analysis["evidence_quality"],
             "match_status": status,
             "live_score": score_str,
             "boom_status": boom_status,
@@ -298,10 +376,10 @@ def sync_pipeline():
     return count, None
 
 
-# Auto-sync on fresh arrival
+# Auto-sync if database is empty on arrival
 existing_matches = db.get_predictions_filtered(min_date=today_str)
 if not existing_matches and fetcher.get_api_key():
-    with st.spinner("Connecting official API and compiling Bayesian models..."):
+    with st.spinner("Connecting API feed and calculating calibrated models..."):
         sync_pipeline()
         existing_matches = db.get_predictions_filtered(min_date=today_str)
 
@@ -312,14 +390,14 @@ with st.sidebar:
     inp_key = st.text_input("Football-Data.org API Key", value=curr_key, type="password")
     if inp_key and inp_key != curr_key:
         db.set_setting("FOOTBALL_API_KEY", inp_key)
-        st.success("API Key updated.")
+        st.success("API key stored.")
 
     st.markdown("---")
     st.markdown("**Data Attribution**")
     st.caption("• Schedules & Standings: football-data.org v4")
-    st.caption("• xG & Probabilities: Model-Derived (Dixon-Coles Bivariate)")
+    st.caption("• Expected Goals (xG): Model-Derived (Dixon-Coles)")
     last_sync = db.get_setting("last_successful_sync", "Never")
-    st.caption(f"• Last Sync: {last_sync}")
+    st.caption(f"• Last Success: {last_sync}")
 
     if st.button("Sync Match Schedule & Scores", use_container_width=True):
         count, err = sync_pipeline()
@@ -329,20 +407,25 @@ with st.sidebar:
             st.success(f"Synced {count} fixtures.")
             st.rerun()
 
-# ----------------- HEADER & 4 KPI SUMMARY CARDS -----------------
-last_sync_time = db.get_setting("last_successful_sync", "Awaiting Sync")
+# ----------------- TOP NAVBAR & FRESHNESS STATUS -----------------
+sync_status = db.get_setting("sync_status", "Awaiting Initial Sync")
+last_sync_time = db.get_setting("last_successful_sync", "Never")
+dot_class = "status-dot-green" if "Live" in sync_status or "Updated" in sync_status else "status-dot-amber"
+
 st.markdown(f"""
 <div class="top-bar">
     <div>
-        <div class="brand-title">⚡ TACTICALEDGE</div>
+        <div class="brand-title">TACTICALEDGE</div>
         <div class="brand-subtitle">Football Intelligence & Calibrated Prediction Platform</div>
     </div>
-    <div style="font-size: 0.75rem; color: #64748B;">
-        Data Freshness: {last_sync_time}
+    <div class="freshness-pill">
+        <div class="{dot_class}"></div>
+        <span>{sync_status} &nbsp;•&nbsp; {last_sync_time}</span>
     </div>
 </div>
 """, unsafe_allow_html=True)
 
+# 4 Performance Metric Cards
 perf = db.get_performance_metrics()
 today_count = len([m for m in existing_matches if m["match_date"] == today_str])
 total_horizon_count = len(existing_matches)
@@ -391,13 +474,14 @@ st.markdown("<br>", unsafe_allow_html=True)
 
 # ----------------- NAVIGATION TABS -----------------
 main_tabs = st.tabs([
-    "📊 Daily Intelligence",
-    "👑 Elite Matches",
-    "🎯 Accumulator Analysis",
-    "📈 Model Performance",
-    "🔍 Match Analytics",
-    "ℹ️ Model Transparency"
+    "Daily Intelligence",
+    "Elite Matches",
+    "Accumulator Analysis",
+    "Model Performance",
+    "Match Analytics",
+    "Model Transparency"
 ])
+
 
 def render_fixture_card(m, key_prefix):
     is_live = m["match_status"] in ['IN_PLAY', 'PAUSED']
@@ -409,10 +493,10 @@ def render_fixture_card(m, key_prefix):
         cls += " match-card-live"
 
     badge_html = (
-        '<span class="badge-status badge-boom">✅ BOOM! WON</span>' if is_boom else (
-            f'<span class="badge-status badge-live">🔴 LIVE &nbsp; {m["live_score"]}</span>' if is_live else (
+        '<span class="badge-status badge-boom">SETTLED WON</span>' if is_boom else (
+            f'<span class="badge-status badge-live">LIVE &nbsp; {m["live_score"]}</span>' if is_live else (
                 f'<span class="badge-status badge-scheduled">FT: {m["live_score"]}</span>' if m["match_status"] in ['FINISHED', 'FT'] else
-                f'<span class="badge-status badge-scheduled">🗓️ {m["match_date"]}</span>'
+                f'<span class="badge-status badge-scheduled">{m.get("kickoff_time", "TBD")}</span>'
             )
         )
     )
@@ -423,7 +507,7 @@ def render_fixture_card(m, key_prefix):
     card_html = f"""
     <div class="{cls}">
         <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
-            <span style="font-size: 0.74rem; color: #64748B; font-weight: 600;">🏆 {m['competition']}</span>
+            <span style="font-size: 0.74rem; color: #64748B; font-weight: 600;">{m['competition']} • {m['match_date']}</span>
             {badge_html}
         </div>
         <div class="team-row">
@@ -433,9 +517,10 @@ def render_fixture_card(m, key_prefix):
             {a_crest_html}
             <span class="team-name">{m['away_team']}</span>
         </div>
-        <div style="display: flex; gap: 8px; margin-bottom: 10px;">
-            <span style="font-size: 0.7rem; color: #64748B; background: #182238; padding: 2px 8px; border-radius: 4px;">{m['market_category']}</span>
-            <span style="font-size: 0.7rem; color: #64748B; background: #182238; padding: 2px 8px; border-radius: 4px;">Expected Goals: {m.get('tactical_tag', 'Model-Derived')}</span>
+        <div style="display: flex; gap: 8px; margin-bottom: 10px; flex-wrap: wrap;">
+            <span class="badge-evidence">{m.get('evidence_quality', 'Moderate Evidence')}</span>
+            <span class="badge-evidence">{m['market_category']}</span>
+            <span class="badge-evidence">{m.get('tactical_tag', '')}</span>
         </div>
         <div class="pick-box">
             <div>
@@ -450,31 +535,34 @@ def render_fixture_card(m, key_prefix):
     </div>
     """
     st.markdown(card_html, unsafe_allow_html=True)
-    
-    # Dedicated interactive Match Analytics expander
+
     with st.expander(f"View Analysis: {m['home_team']} vs {m['away_team']}"):
         details = json.loads(m.get("details_json", "{}"))
         if details:
-            st.markdown(f"**Model Statistical Rationale:**")
-            st.caption(details.get("explanation", "Grounded analysis compiled from league standings and attack/defense indices."))
-            
+            expl = details.get("explanation", {})
+            if isinstance(expl, dict):
+                st.markdown(f"**Statistical Summary:** {expl.get('summary', '')}")
+                st.markdown(f"**Supporting Evidence:** {expl.get('supporting', '')}")
+                st.markdown(f"**Risk Factors:** {expl.get('risk', '')}")
+            else:
+                st.markdown(f"**Analysis:** {expl}")
+
             c1, c2, c3 = st.columns(3)
             with c1:
-                st.metric("Home Expected Goals (xG)", f"{details.get('home_xg', 1.0):.2f}", help="Derived from Dixon-Coles bivariate distribution")
+                st.metric("Home Expected Goals (xG)", f"{details.get('home_xg', 1.0):.2f}")
             with c2:
                 st.metric("Away Expected Goals (xG)", f"{details.get('away_xg', 1.0):.2f}")
             with c3:
                 p_h = details.get("prob_home", 0.33) * 100
                 st.metric("Home Win Prob", f"{p_h:.1f}%")
 
-            # Top 5 Scorelines
             scores = details.get("top_scores", [])
             if scores:
                 st.markdown("**Top Probable Scorelines:**")
                 score_str = " &nbsp;|&nbsp; ".join([f"**{s['score']}** ({s['prob']*100:.1f}%)" for s in scores])
                 st.markdown(f"<span style='color: #94A3B8; font-size: 0.85rem;'>{score_str}</span>", unsafe_allow_html=True)
         else:
-            st.info("Detailed statistical breakdown loading...")
+            st.info("Match analytics loading...")
 
 
 # =============================================================================
@@ -488,7 +576,7 @@ with main_tabs[0]:
         leagues = ["All Leagues"] + sorted(list({r["competition"] for r in existing_matches}))
         sel_comp = st.selectbox("Competition Filter", leagues)
     with f3:
-        sel_stat = st.selectbox("Match Status", ["All Statuses", "Upcoming", "Live", "Finished"])
+        sel_stat = st.selectbox("Match Status", ["All Statuses", "Upcoming", "Live", "Finished", "Postponed"])
     with f4:
         mkts = ["All Markets"] + sorted(list({r["market_category"] for r in existing_matches}))
         sel_mkt = st.selectbox("Market Filter", mkts)
@@ -578,7 +666,7 @@ with main_tabs[2]:
             st.markdown(f"""
             <div style="background: #0C1220; border: 1px solid #1A2234; border-radius: 8px; padding: 10px 14px; margin-bottom: 8px; display: flex; justify-content: space-between; align-items: center;">
                 <div>
-                    <div style="font-size: 0.68rem; color: #64748B;">{leg['competition']} • {leg['match_date']}</div>
+                    <div style="font-size: 0.68rem; color: #64748B;">{leg['competition']} • {leg['match_date']} ({leg.get('kickoff_time', 'TBD')})</div>
                     <div style="font-weight: 700; color: #FFFFFF; font-size: 0.9rem;">{leg['home_team']} vs {leg['away_team']}</div>
                     <div style="color: #38BDF8; font-weight: 700; font-size: 0.85rem; margin-top: 2px;">⚡ {leg['market_pick']}</div>
                 </div>
@@ -626,16 +714,20 @@ with main_tabs[4]:
     st.caption("Interactive deep-dive into Dixon-Coles goal expectation matrices and market distributions.")
 
     if existing_matches:
-        match_options = [f"{m['match_date']} | {m['home_team']} vs {m['away_team']} ({m['competition']})" for m in existing_matches]
+        match_options = [f"{m['match_date']} {m.get('kickoff_time', '')} | {m['home_team']} vs {m['away_team']} ({m['competition']})" for m in existing_matches]
         sel_idx = st.selectbox("Select Fixture for Deep Analysis:", range(len(match_options)), format_func=lambda i: match_options[i])
         selected_m = existing_matches[sel_idx]
         details = json.loads(selected_m.get("details_json", "{}"))
 
         if details:
             st.markdown(f"### {selected_m['home_team']} vs {selected_m['away_team']}")
-            st.caption(f"🏆 {selected_m['competition']} • 🗓️ {selected_m['match_date']} • Status: {selected_m['match_status']}")
+            st.caption(f"🏆 {selected_m['competition']} • 🗓️ {selected_m['match_date']} ({selected_m.get('kickoff_time', '')}) • Status: {selected_m['match_status']}")
 
-            st.info(f"**Grounded Statistical Rationale:**\n\n{details.get('explanation', '')}")
+            expl = details.get("explanation", {})
+            if isinstance(expl, dict):
+                st.info(f"**Model Rationale:** {expl.get('summary', '')}\n\n**Tactical Edge:** {expl.get('supporting', '')}\n\n**Risk Factors:** {expl.get('risk', '')}")
+            else:
+                st.info(f"**Model Rationale:** {expl}")
 
             d1, d2, d3 = st.columns(3)
             with d1:
@@ -684,13 +776,16 @@ with main_tabs[5]:
     
     #### 1. Predictive Engine
     * **Algorithm:** Dixon-Coles Bivariate Poisson Goal Model with low-scoring correlation parameter ($\\tau$-adjustment for 0-0, 1-0, 0-1, and 1-1 scorelines).
-    * **Rating Methodology:** Bayesian shrinkage regresses raw attacking and defensive ratings toward the league mean ($\mu = 1.0$) with prior weight $\\alpha = 6.0$ matches. This prevents small-sample distortions from producing extreme ($>90\%$) probabilities.
-    * **Distribution Bounds:** All 1X2 probabilities are derived from an $8 \\times 8$ score matrix strictly normalized to $\sum P = 1.0$.
+    * **Rating Methodology:** Bayesian shrinkage regresses raw attacking and defensive ratings toward the league mean ($\\mu = 1.0$) with prior weight $\\alpha = 6.0$ matches. This prevents small-sample distortions from producing extreme ($>90\%$) probabilities.
+    * **Distribution Bounds:** All 1X2 probabilities are derived from an $8 \\times 8$ score matrix strictly normalized to $\\sum P = 1.0$.
 
     #### 2. Data Sources & Attribution
     * **Schedules, Live Statuses & Standings:** Supplied via official API feeds from `football-data.org v4`.
     * **Expected Goals (xG) & Fair Odds:** Model-Derived by TacticalEdge. Bookmaker margins are estimated at $6.0\%$ to derive fair baseline odds.
-    * **No Fabricated Statistics:** TacticalEdge never invents player injuries, referee stats, or unverified team news.
+    * **Evidence Quality Rating:** Dynamically classified based on games played:
+      - **Strong Evidence:** $\\ge 8$ league matches played per team.
+      - **Moderate Evidence:** $4$ to $7$ league matches played per team.
+      - **Limited Evidence:** $< 4$ matches played (heavy Bayesian shrinkage applied).
 
     #### 3. Model Limitations
     * Predictions reflect statistical strength based on completed league matches and goal rates. They do not account for unannounced tactical rotations or red cards during live matches.
