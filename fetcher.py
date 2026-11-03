@@ -1,7 +1,6 @@
 """
-fetcher.py — Football-Data.org API Client & Standings Cache
-Provides rate-limited fixture fetching, league standings caching,
-live score polling, and robust API key extraction.
+fetcher.py — Football-Data.org API Client & Data Provider Attribution
+Pulls official schedules, live scores, standings, and team crest URLs.
 """
 
 import os
@@ -13,12 +12,6 @@ BASE_URL = "https://api.football-data.org/v4"
 
 
 def get_api_key():
-    """
-    Safely resolves API Key in priority order:
-    1. Streamlit Secrets (st.secrets["FOOTBALL_API_KEY"])
-    2. Environment Variable (os.getenv("FOOTBALL_API_KEY"))
-    3. SQLite Settings Table
-    """
     try:
         if hasattr(st, "secrets") and "FOOTBALL_API_KEY" in st.secrets:
             key = str(st.secrets["FOOTBALL_API_KEY"]).strip()
@@ -45,12 +38,11 @@ def get_api_key():
 @st.cache_data(ttl=600, show_spinner=False)
 def fetch_upcoming_fixtures(start_date_str, days_ahead=7):
     """
-    Queries matches across the scheduled date window.
-    Cached for 10 minutes to protect the 10 calls/min rate limit.
+    Fetches official match schedules, live statuses, and verified team crests.
     """
     api_key = get_api_key()
     if not api_key:
-        return [], "API Key Missing. Add FOOTBALL_API_KEY in the sidebar or Streamlit secrets."
+        return [], "API Key Missing. Add FOOTBALL_API_KEY in sidebar or Streamlit secrets."
 
     try:
         start_dt = datetime.strptime(start_date_str, "%Y-%m-%d")
@@ -66,26 +58,23 @@ def fetch_upcoming_fixtures(start_date_str, days_ahead=7):
         res = requests.get(url, headers=headers, timeout=12)
         if res.status_code == 200:
             matches = res.json().get("matches", [])
+            # Store timestamp for Data Freshness Indicator
+            from db import set_setting
+            set_setting("last_successful_sync", datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC"))
             return matches, None
         elif res.status_code == 403:
-            return [], "Authentication Error (403): Invalid or inactive API key on football-data.org."
+            return [], "Authentication Error (403): Invalid API key on football-data.org."
         elif res.status_code == 429:
-            return [], "Rate limit reached (429): Maximum 10 calls/minute on free tier. Please wait 60 seconds."
+            return [], "Rate limit reached (429): Maximum 10 requests per minute on free tier."
         else:
             return [], f"API returned status code: {res.status_code}"
-    except requests.exceptions.Timeout:
-        return [], "Connection timeout: football-data.org did not respond within 12 seconds."
     except Exception as e:
-        return [], f"Network error: {str(e)}"
+        return [], f"Connection error: {str(e)}"
 
 
 @st.cache_data(ttl=3600, show_spinner=False)
 def fetch_standings(competition_code):
-    """
-    Retrieves full league table for a competition in a single call.
-    Caches for 1 hour to prevent redundant requests while supplying
-    accurate goal tallies and attack/defense strength indexes.
-    """
+    """Fetches full league standings table in one request."""
     api_key = get_api_key()
     if not api_key:
         return {}
@@ -106,16 +95,16 @@ def fetch_standings(competition_code):
                         gf = row.get("goalsFor", 0)
                         ga = row.get("goalsAgainst", 0)
 
-                        # Attack/Defense ratings relative to league average 1.35 goals/match
                         team_stats[team_name] = {
-                            "att_strength": round(max(0.40, (gf / played) / 1.35), 3),
-                            "def_strength": round(max(0.40, (ga / played) / 1.35), 3),
+                            "att_strength": round((gf / played) / 1.35, 3),
+                            "def_strength": round((ga / played) / 1.35, 3),
                             "played": played,
                             "gf": gf,
                             "ga": ga,
                             "form": row.get("form", "N/A"),
                             "points": row.get("points", 0),
-                            "position": row.get("position", 0)
+                            "position": row.get("position", 0),
+                            "crest": row["team"].get("crest", "")
                         }
             return team_stats
         return {}
