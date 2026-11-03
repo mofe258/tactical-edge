@@ -1,11 +1,12 @@
 import streamlit as st
+import sqlite3
 import json
-from datetime import date
-import db
-from engine import FootballEngine
+from datetime import datetime, date
+import numpy as np
+from scipy.stats import poisson
 import fetcher
 
-# App Configuration
+# Page Configuration
 st.set_page_config(
     page_title="Tactical Edge | Multi-Odds Boom Suite",
     page_icon="⚡",
@@ -13,13 +14,168 @@ st.set_page_config(
     initial_sidebar_state="collapsed"
 )
 
-db.init_db()
+# ----------------- SELF-CONTAINED DATABASE ENGINE -----------------
+DB_NAME = "predictions.db"
+ENGINE_VERSION = "v5_all_in_one_sporty"
 
-# Auto-purge old single-market cache so new SportyBet combo picks load immediately
-ENGINE_VERSION = "v4_sporty_multitier"
-if db.get_setting("engine_version") != ENGINE_VERSION:
-    db.clear_all()
-    db.set_setting("engine_version", ENGINE_VERSION)
+def init_db():
+    conn = sqlite3.connect(DB_NAME)
+    c = conn.cursor()
+    c.execute('''CREATE TABLE IF NOT EXISTS predictions (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    match_date TEXT,
+                    match_id TEXT UNIQUE,
+                    competition TEXT,
+                    home_team TEXT,
+                    away_team TEXT,
+                    market TEXT,
+                    confidence REAL,
+                    est_odds REAL,
+                    locked_at TEXT,
+                    extra_markets TEXT DEFAULT '{}'
+                )''')
+    c.execute('''CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, val TEXT)''')
+    conn.commit()
+    conn.close()
+
+def get_setting(key, default=""):
+    conn = sqlite3.connect(DB_NAME)
+    c = conn.cursor()
+    try:
+        c.execute("SELECT val FROM settings WHERE key = ?", (key,))
+        row = c.fetchone()
+        return row[0] if row else default
+    except sqlite3.OperationalError:
+        return default
+    finally:
+        conn.close()
+
+def set_setting(key, val):
+    conn = sqlite3.connect(DB_NAME)
+    c = conn.cursor()
+    c.execute("INSERT OR REPLACE INTO settings (key, val) VALUES (?, ?)", (key, str(val)))
+    conn.commit()
+    conn.close()
+
+def clear_all():
+    conn = sqlite3.connect(DB_NAME)
+    c = conn.cursor()
+    c.execute("DELETE FROM predictions")
+    conn.commit()
+    conn.close()
+
+def save_prediction(match_date, match_id, comp, home, away, market, confidence, est_odds, extra_markets="{}"):
+    conn = sqlite3.connect(DB_NAME)
+    c = conn.cursor()
+    try:
+        c.execute('''INSERT OR REPLACE INTO predictions 
+                     (match_date, match_id, competition, home_team, away_team, market, confidence, est_odds, locked_at, extra_markets)
+                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)''',
+                  (match_date, match_id, comp, home, away, market, confidence, est_odds, datetime.utcnow().strftime("%H:%M UTC"), str(extra_markets)))
+        conn.commit()
+    finally:
+        conn.close()
+
+def get_upcoming_predictions(start_date):
+    conn = sqlite3.connect(DB_NAME)
+    c = conn.cursor()
+    try:
+        c.execute("""SELECT match_date, competition, home_team, away_team, market, confidence, est_odds, locked_at, extra_markets 
+                     FROM predictions 
+                     WHERE match_date >= ? 
+                     ORDER BY match_date ASC, confidence DESC""", (start_date,))
+        rows = c.fetchall()
+        conn.close()
+        return rows
+    except sqlite3.OperationalError:
+        c.execute("DROP TABLE IF EXISTS predictions")
+        conn.commit()
+        conn.close()
+        init_db()
+        return []
+
+# Initialize database
+init_db()
+
+# Auto-purge old single-market cache so new SportyBet combo picks load fresh
+if get_setting("engine_version") != ENGINE_VERSION:
+    clear_all()
+    set_setting("engine_version", ENGINE_VERSION)
+
+# ----------------- SELF-CONTAINED PREDICTION ENGINE -----------------
+class InternalFootballEngine:
+    def __init__(self, league_avg_home=1.45, league_avg_away=1.15):
+        self.league_avg_home = league_avg_home
+        self.league_avg_away = league_avg_away
+
+    def calculate_xg(self, home_att, home_def, away_att, away_def):
+        home_xg = max(0.2, home_att * away_def * self.league_avg_home)
+        away_xg = max(0.2, away_att * home_def * self.league_avg_away)
+        return home_xg, away_xg
+
+    def predict(self, home_xg, away_xg, home_att, home_def, away_att, away_def, max_goals=7):
+        matrix = np.zeros((max_goals, max_goals))
+        for h in range(max_goals):
+            for a in range(max_goals):
+                matrix[h][a] = poisson.pmf(h, home_xg) * poisson.pmf(a, away_xg)
+
+        prob_home = float(np.sum(np.tril(matrix, -1)))
+        prob_draw = float(np.sum(np.diag(matrix)))
+        prob_away = float(np.sum(np.triu(matrix, 1)))
+
+        dc_1x = prob_home + prob_draw
+        dc_x2 = prob_away + prob_draw
+
+        o05 = float(1.0 - matrix[0][0])
+        o15 = float(1.0 - (matrix[0][0] + matrix[1][0] + matrix[0][1]))
+        u25 = float(np.sum([matrix[h][a] for h in range(max_goals) for a in range(max_goals) if h + a < 2.5]))
+        o25 = 1.0 - u25
+        u45 = float(np.sum([matrix[h][a] for h in range(max_goals) for a in range(max_goals) if h + a <= 4]))
+
+        h_and_o15 = float(np.sum([matrix[h][a] for h in range(max_goals) for a in range(max_goals) if h > a and (h + a >= 2)]))
+        a_and_o15 = float(np.sum([matrix[h][a] for h in range(max_goals) for a in range(max_goals) if a > h and (h + a >= 2)]))
+        h_and_o25 = float(np.sum([matrix[h][a] for h in range(max_goals) for a in range(max_goals) if h > a and (h + a >= 3)]))
+
+        away_handicap_3 = float(np.sum([matrix[h][a] for h in range(max_goals) for a in range(max_goals) if (h - a) < 3]))
+
+        # Dynamic market assignment matching your winning slips
+        best_market = "Over 1.5 Goals"
+        best_prob = o15
+        rec_odds = 1.15
+
+        if prob_home >= 0.72 and h_and_o25 >= 0.65:
+            best_market, best_prob, rec_odds = "Home & Over 2.5", h_and_o25, 1.35
+        elif prob_home >= 0.68 and h_and_o15 >= 0.62:
+            best_market, best_prob, rec_odds = "Home & Over 1.5", h_and_o15, 1.65
+        elif prob_away >= 0.65 and a_and_o15 >= 0.60:
+            best_market, best_prob, rec_odds = "Away & Over 1.5", a_and_o15, 1.28
+        elif prob_home >= 0.60 and prob_home < 0.70:
+            best_market, best_prob, rec_odds = "Home Win (1X2)", prob_home, 1.75
+        elif prob_away > 0.52 and dc_x2 >= 0.85:
+            best_market, best_prob, rec_odds = "Draw or Away (X2)", dc_x2, 1.15
+        elif u45 >= 0.86 and (home_xg + away_xg) < 3.0:
+            best_market, best_prob, rec_odds = "Under 4.5 Goals", u45, 1.24
+        elif away_handicap_3 >= 0.88 and prob_home > prob_away:
+            best_market, best_prob, rec_odds = "Handicap Away (+3.0)", away_handicap_3, 1.18
+        elif o25 >= 0.75:
+            best_market, best_prob, rec_odds = "Over 2.5 Goals", o25, 1.30
+        elif dc_1x >= 0.88:
+            best_market, best_prob, rec_odds = "Home or Draw (1X)", dc_1x, 1.12
+        else:
+            best_market, best_prob, rec_odds = "Over 1.5 Goals", o15, 1.15
+
+        return {
+            "best_market": best_market,
+            "best_prob": best_prob,
+            "est_odds": rec_odds,
+            "h_o15": h_and_o15,
+            "a_o15": a_and_o15,
+            "u45": u45,
+            "dc_x2": dc_x2,
+            "handicap": away_handicap_3,
+            "o15": o15,
+            "o05": o05
+        }
 
 # ----------------- LIQUID GLASS STYLES -----------------
 st.markdown("""
@@ -28,7 +184,6 @@ st.markdown("""
     html, body, [class*="css"] { font-family: 'Plus Jakarta Sans', sans-serif; }
     .stApp { background: radial-gradient(circle at 15% 20%, #0c1424 0%, #050811 100%); color: #e2e8f0; }
 
-    /* Glass Ticket Hero */
     .ticket-hero {
         background: linear-gradient(135deg, rgba(239, 68, 68, 0.12) 0%, rgba(16, 185, 129, 0.08) 100%);
         backdrop-filter: blur(25px);
@@ -65,7 +220,7 @@ def run_auto_sync():
     fixtures, err = fetcher.fetch_upcoming_fixtures(today_str, days_ahead=7)
     if err or not fixtures:
         return 0
-    engine = FootballEngine()
+    engine = InternalFootballEngine()
     standings_cache = {}
     count = 0
     for m in fixtures:
@@ -84,7 +239,7 @@ def run_auto_sync():
         a_stat = team_stats.get(a_team, {"att_strength": 1.0, "def_strength": 1.0})
         
         h_xg, a_xg = engine.calculate_xg(h_stat["att_strength"], h_stat["def_strength"], a_stat["att_strength"], a_stat["def_strength"])
-        suite = engine.predict_full_suite(h_xg, a_xg, h_stat["att_strength"], h_stat["def_strength"], a_stat["att_strength"], a_stat["def_strength"])
+        suite = engine.predict(h_xg, a_xg, h_stat["att_strength"], h_stat["def_strength"], a_stat["att_strength"], a_stat["def_strength"])
 
         extra_markets_json = json.dumps({
             "h_o15": round(suite["h_o15"] * 100, 1),
@@ -96,19 +251,19 @@ def run_auto_sync():
             "o05": round(suite["o05"] * 100, 1)
         })
 
-        db.save_prediction(
+        save_prediction(
             m_date, str(m["id"]), m["competition"]["name"], 
             h_team, a_team, suite["best_market"], suite["best_prob"], suite["est_odds"], extra_markets_json
         )
         count += 1
     return count
 
-records = db.get_upcoming_predictions(today_str)
+records = get_upcoming_predictions(today_str)
 
 if not records and fetcher.API_KEY != "PASTE_YOUR_API_KEY_HERE":
     with st.spinner("⚡ Running multi-market algorithm across scheduled fixtures..."):
         run_auto_sync()
-        records = db.get_upcoming_predictions(today_str)
+        records = get_upcoming_predictions(today_str)
 
 # ----------------- MAIN INTERFACE -----------------
 st.markdown('<div class="brand-title">Tactical Predictive Suite</div>', unsafe_allow_html=True)
@@ -117,7 +272,6 @@ st.markdown('<div style="color: #94a3b8; margin-bottom: 20px;">Precision sports 
 if records:
     sorted_records = sorted(records, key=lambda x: x[5], reverse=True)
 
-    # 4 DEDICATED SECTIONS
     main_tabs = st.tabs([
         "🔥 Odds Tier Accumulator (3, 5, 10, 20, 100)",
         "🎯 Sure Banger Hits (Lock-In Singles)",
@@ -125,18 +279,13 @@ if records:
         "📊 All Daily Matches & Markets"
     ])
 
-    # =========================================================================
-    # TAB 1: ODDS TIER ACCUMULATOR BUILDER (3, 5, 10, 20, 100 ODDS)
-    # =========================================================================
+    # 1. ODDS TIER ACCUMULATOR BUILDER
     with main_tabs[0]:
         st.markdown("<p style='color: #94a3b8; font-size: 0.9rem;'>Select your targeted odds tier. The engine automatically compounds high-conviction legs to match your desired slip.</p>", unsafe_allow_html=True)
-        
         tier = st.radio("Choose Target Odds:", ["3 Odds", "5 Odds", "10 Odds", "20 Odds", "100 Odds"], horizontal=True)
-        
         target_dict = {"3 Odds": 3.0, "5 Odds": 5.0, "10 Odds": 10.0, "20 Odds": 20.0, "100 Odds": 100.0}
         target_val = target_dict[tier]
 
-        # Assemble accumulator legs to meet target
         selected_legs = []
         current_odds = 1.0
 
@@ -148,8 +297,6 @@ if records:
                 break
 
         current_odds = round(current_odds, 2)
-        
-        # Suggested stake based on odds tier
         rec_stakes = {"3 Odds": 10000, "5 Odds": 5000, "10 Odds": 2000, "20 Odds": 2000, "100 Odds": 500}
         stake = rec_stakes[tier]
         est_return = f"₦{round(stake * current_odds):,}"
@@ -199,22 +346,16 @@ if records:
 
         st.markdown("</div>", unsafe_allow_html=True)
 
-    # =========================================================================
-    # TAB 2: SURE BANGER HITS (LOCK-IN SINGLES & DOUBLE COMBOS)
-    # =========================================================================
+    # 2. SURE BANGER HITS
     with main_tabs[1]:
         st.markdown("<p style='color: #94a3b8; font-size: 0.9rem;'>Dedicated to individual lock-in selections. Use these for heavy single stakes or conservative rollovers.</p>", unsafe_allow_html=True)
-        
-        # Take the top 6 highest certainty matches
         bangers = sorted_records[:6]
-        
         b_cols = st.columns(2)
         for idx, item in enumerate(bangers):
             m_date, m_comp, m_home, m_away, m_market, m_conf, m_odds = item[:7]
             extra = json.loads(item[8]) if len(item) > 8 and item[8] else {}
             o15 = extra.get("o15", "92.0")
             o05 = extra.get("o05", "99.0")
-            
             with b_cols[idx % 2]:
                 st.markdown(f"""
                 <div class="glass-card" style="border-left: 4px solid #10b981;">
@@ -243,12 +384,9 @@ if records:
                 </div>
                 """, unsafe_allow_html=True)
 
-    # =========================================================================
-    # TAB 3: SURE FIXTURES (DETAILED STAKING SIGNALS)
-    # =========================================================================
+    # 3. SURE FIXTURES (DETAILED STAKING SIGNALS)
     with main_tabs[2]:
         st.markdown("<p style='color: #94a3b8; font-size: 0.9rem;'>Detailed tactical cards specifying exactly what market to stake, backup options, and edge metrics.</p>", unsafe_allow_html=True)
-
         s_cols = st.columns(2)
         for idx, item in enumerate(sorted_records[:8]):
             m_date, m_comp, m_home, m_away, m_market, m_conf, m_odds = item[:7]
@@ -257,7 +395,6 @@ if records:
             u45 = extra.get("u45", "-")
             dc_x2 = extra.get("dc_x2", "-")
             hcap = extra.get("handicap", "-")
-
             with s_cols[idx % 2]:
                 st.markdown(f"""
                 <div class="glass-card">
@@ -287,15 +424,12 @@ if records:
                 </div>
                 """, unsafe_allow_html=True)
 
-    # =========================================================================
-    # TAB 4: ALL DAILY MATCHES & MARKETS
-    # =========================================================================
+    # 4. ALL DAILY MATCHES & MARKETS
     with main_tabs[3]:
         search_query = st.text_input("🔍 Filter by Team or Competition", "")
         filtered = sorted_records
         if search_query:
             filtered = [r for r in sorted_records if search_query.lower() in f"{r[2]} {r[3]} {r[1]}".lower()]
-
         cols_all = st.columns(2)
         for idx, item in enumerate(filtered):
             m_date, m_comp, m_home, m_away, m_market, m_conf, m_odds = item[:7]
