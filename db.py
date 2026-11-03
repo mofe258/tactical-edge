@@ -16,17 +16,12 @@ def init_db():
                     market TEXT,
                     confidence REAL,
                     locked_at TEXT,
-                    extra_markets TEXT
+                    extra_markets TEXT DEFAULT '{}'
                 )''')
-    for col, col_type in [("extra_markets", "TEXT")]:
-        try:
-            c.execute(f"ALTER TABLE predictions ADD COLUMN {col} {col_type}")
-        except sqlite3.OperationalError:
-            pass
     conn.commit()
     conn.close()
 
-def save_prediction(match_date, match_id, comp, home, away, market, confidence, extra_markets=""):
+def save_prediction(match_date, match_id, comp, home, away, market, confidence, extra_markets="{}"):
     conn = sqlite3.connect(DB_NAME)
     c = conn.cursor()
     try:
@@ -41,16 +36,23 @@ def save_prediction(match_date, match_id, comp, home, away, market, confidence, 
 def get_upcoming_predictions(start_date):
     conn = sqlite3.connect(DB_NAME)
     c = conn.cursor()
-    c.execute("""SELECT match_date, competition, home_team, away_team, market, confidence, locked_at, extra_markets 
-                 FROM predictions 
-                 WHERE match_date >= ? 
-                 ORDER BY match_date ASC, confidence DESC""", (start_date,))
-    rows = c.fetchall()
-    conn.close()
-    return rows
+    try:
+        c.execute("""SELECT match_date, competition, home_team, away_team, market, confidence, locked_at, extra_markets 
+                     FROM predictions 
+                     WHERE match_date >= ? 
+                     ORDER BY match_date ASC, confidence DESC""", (start_date,))
+        rows = c.fetchall()
+        conn.close()
+        return rows
+    except sqlite3.OperationalError:
+        # Auto-heal: If an old database schema exists, reset it cleanly
+        c.execute("DROP TABLE IF EXISTS predictions")
+        conn.commit()
+        conn.close()
+        init_db()
+        return []
 
 def clear_all():
-    """Clears old single-market cache so new multi-market picks take over."""
     conn = sqlite3.connect(DB_NAME)
     c = conn.cursor()
     c.execute("DELETE FROM predictions")
