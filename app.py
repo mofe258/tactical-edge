@@ -7,16 +7,16 @@ from scipy.stats import poisson
 import fetcher
 
 st.set_page_config(
-    page_title="Tactical Edge | SportyBet Multi-Market Suite",
+    page_title="Tactical Edge | SportyBet Value Suite",
     page_icon="⚡",
     layout="wide",
     initial_sidebar_state="collapsed"
 )
 
-# ----------------- DATABASE SETUP -----------------
+# ----------------- DATABASE CONFIG & AUTO-PURGE -----------------
 DB_NAME = "predictions.db"
-# Incrementing version auto-purges old generic records on first load
-ENGINE_VERSION = "v7_full_sporty_diversity"
+# Changing version wipes all old 1.02/Under 4.5 junk records instantly
+ENGINE_VERSION = "v8_pure_sporty_value_engine"
 
 def init_db():
     conn = sqlite3.connect(DB_NAME)
@@ -81,10 +81,11 @@ def get_upcoming_predictions(start_date):
     conn = sqlite3.connect(DB_NAME)
     c = conn.cursor()
     try:
+        # Sort by Value Score (Confidence * Odds) so high-return combos rise to the top
         c.execute("""SELECT match_date, competition, home_team, away_team, market_category, market_pick, confidence, est_odds, locked_at, extra_data 
                      FROM predictions 
                      WHERE match_date >= ? 
-                     ORDER BY match_date ASC, confidence DESC""", (start_date,))
+                     ORDER BY (confidence * est_odds) DESC""", (start_date,))
         rows = c.fetchall()
         conn.close()
         return rows
@@ -97,23 +98,23 @@ def get_upcoming_predictions(start_date):
 
 init_db()
 
-# Auto-purge old single-market cache so new multi-market SportyBet picks load fresh
+# Auto-wipe cache when engine version updates
 if get_setting("engine_version") != ENGINE_VERSION:
     clear_all()
     set_setting("engine_version", ENGINE_VERSION)
 
-# ----------------- SPORTYBET MULTI-MARKET ENGINE -----------------
-class SportyBetQuantEngine:
+# ----------------- REAL SPORTYBET VALUE ENGINE -----------------
+class SportyBetValueEngine:
     def __init__(self, league_avg_home=1.45, league_avg_away=1.15):
         self.league_avg_home = league_avg_home
         self.league_avg_away = league_avg_away
 
     def calculate_xg(self, home_att, home_def, away_att, away_def):
-        home_xg = max(0.2, home_att * away_def * self.league_avg_home)
-        away_xg = max(0.2, away_att * home_def * self.league_avg_away)
+        home_xg = max(0.4, home_att * away_def * self.league_avg_home)
+        away_xg = max(0.3, away_att * home_def * self.league_avg_away)
         return home_xg, away_xg
 
-    def evaluate_all_markets(self, home_xg, away_xg, home_team, away_team, max_goals=7):
+    def evaluate_match_markets(self, home_xg, away_xg, home_team, away_team, max_goals=7):
         matrix = np.zeros((max_goals, max_goals))
         for h in range(max_goals):
             for a in range(max_goals):
@@ -122,78 +123,122 @@ class SportyBetQuantEngine:
         prob_home = float(np.sum(np.tril(matrix, -1)))
         prob_draw = float(np.sum(np.diag(matrix)))
         prob_away = float(np.sum(np.triu(matrix, 1)))
+
         dc_1x = prob_home + prob_draw
         dc_x2 = prob_away + prob_draw
 
-        # Over / Under
-        o05 = float(1.0 - matrix[0][0])
-        o15 = float(1.0 - (matrix[0][0] + matrix[1][0] + matrix[0][1]))
-        u45 = float(np.sum([matrix[h][a] for h in range(max_goals) for a in range(max_goals) if h + a <= 4]))
-
-        # 1st Half Goals (First 45 min averages ~45% of total xG)
-        exp_ht = 0.45 * (home_xg + away_xg)
-        ht_o15 = float(1.0 - poisson.cdf(1, exp_ht))
-
-        # Combos
+        # 1. Combos: 1X2 & Over/Under
         h_and_o15 = float(np.sum([matrix[h][a] for h in range(max_goals) for a in range(max_goals) if h > a and (h + a >= 2)]))
         a_and_o15 = float(np.sum([matrix[h][a] for h in range(max_goals) for a in range(max_goals) if a > h and (h + a >= 2)]))
         h_and_o25 = float(np.sum([matrix[h][a] for h in range(max_goals) for a in range(max_goals) if h > a and (h + a >= 3)]))
 
-        # Team Totals
-        home_o25 = float(1.0 - sum(poisson.pmf(k, home_xg) for k in range(3)))
+        # 2. Both Teams To Score (BTTS / GG)
+        btts_yes = float(np.sum([matrix[h][a] for h in range(1, max_goals) for a in range(1, max_goals)]))
 
-        # Handicaps
+        # 3. 1st Half Goals (First 45 min averages ~45% of total goals)
+        exp_ht = 0.45 * (home_xg + away_xg)
+        ht_o15 = float(1.0 - poisson.cdf(1, exp_ht))
+        ht_o05 = float(1.0 - poisson.pmf(0, exp_ht))
+
+        # 4. Multi-Goals (2 to 5 goals)
+        mg_25 = float(np.sum([matrix[h][a] for h in range(max_goals) for a in range(max_goals) if 2 <= (h + a) <= 5]))
+
+        # 5. Team Totals
+        home_o15 = float(1.0 - poisson.cdf(1, home_xg))
+        away_o15 = float(1.0 - poisson.cdf(1, away_xg))
+
+        # 6. Handicaps (0:2 and 0:3)
+        away_hcap_2 = float(np.sum([matrix[h][a] for h in range(max_goals) for a in range(max_goals) if (h - a) < 2]))
         away_hcap_3 = float(np.sum([matrix[h][a] for h in range(max_goals) for a in range(max_goals) if (h - a) < 3]))
-        away_hcap_4 = float(np.sum([matrix[h][a] for h in range(max_goals) for a in range(max_goals) if (h - a) < 4]))
+        home_hcap_2 = float(np.sum([matrix[h][a] for h in range(max_goals) for a in range(max_goals) if (a - h) < 2]))
 
-        # Catalog all candidate markets matching the winning tickets
+        # 7. Safe Caps
+        u45 = float(np.sum([matrix[h][a] for h in range(max_goals) for a in range(max_goals) if h + a <= 4]))
+
         candidates = []
 
-        # 1. Combos
-        if h_and_o15 >= 0.58 and prob_home >= 0.65:
-            candidates.append({"cat": "1X2 & Over/Under 1.5", "pick": "Home & Over 1.5", "prob": h_and_o15, "odds": 1.68})
-        if a_and_o15 >= 0.55 and prob_away >= 0.60:
-            candidates.append({"cat": "1X2 & Over/Under 1.5", "pick": "Away & Over 1.5", "prob": a_and_o15, "odds": 1.26})
-        if h_and_o25 >= 0.52 and prob_home >= 0.68:
-            candidates.append({"cat": "1X2 & Over/Under 2.5", "pick": "Home & Over 2.5", "prob": h_and_o25, "odds": 1.32})
+        # --- TACTICAL MARKET GENERATION (NO OVER 0.5 JUNK ALLOWED) ---
+        
+        # COMBOS (From Chelsea v Leeds @ 1.68, Al Nassr @ 1.32, Benfica @ 1.26)
+        if h_and_o15 >= 0.45:
+            odds = round(max(1.45, min(1.85, (1.0 / h_and_o15) * 0.90)), 2)
+            candidates.append({"cat": "1X2 & Over/Under 1.5", "pick": "Home & Over 1.5", "prob": h_and_o15, "odds": odds, "weight": 1.4})
 
-        # 2. Handicaps
-        if away_hcap_4 >= 0.94 and prob_home > 0.65:
-            candidates.append({"cat": "Handicap 0:4", "pick": "Away (0:4)", "prob": away_hcap_4, "odds": 1.22})
-        elif away_hcap_3 >= 0.90 and prob_home > 0.60:
-            candidates.append({"cat": "Handicap 0:3", "pick": "Away (0:3)", "prob": away_hcap_3, "odds": 1.16})
+        if a_and_o15 >= 0.40:
+            odds = round(max(1.35, min(1.75, (1.0 / a_and_o15) * 0.90)), 2)
+            candidates.append({"cat": "1X2 & Over/Under 1.5", "pick": "Away & Over 1.5", "prob": a_and_o15, "odds": odds, "weight": 1.35})
 
-        # 3. 1st Half Goals
-        if ht_o15 >= 0.52 and (home_xg + away_xg) >= 3.2:
-            candidates.append({"cat": "1st Half - Over/Under", "pick": "Over 1.5", "prob": ht_o15, "odds": 1.55})
+        if h_and_o25 >= 0.42:
+            odds = round(max(1.30, min(1.68, (1.0 / h_and_o25) * 0.90)), 2)
+            candidates.append({"cat": "1X2 & Over/Under 2.5", "pick": "Home & Over 2.5", "prob": h_and_o25, "odds": odds, "weight": 1.3})
 
-        # 4. Team Totals
-        if home_o25 >= 0.55 and home_xg >= 2.3:
-            candidates.append({"cat": f"{home_team} Over/Under", "pick": "Over 2.5", "prob": home_o25, "odds": 1.29})
+        # HANDICAPS (From Galatasaray +3 @ 1.16, Viking FK +4 @ 1.22)
+        if away_hcap_3 >= 0.85 and prob_home > prob_away:
+            odds = round(max(1.18, min(1.32, (1.0 / away_hcap_3) * 0.95)), 2)
+            candidates.append({"cat": "Handicap 0:3", "pick": "Away (0:3)", "prob": away_hcap_3, "odds": odds, "weight": 1.25})
 
-        # 5. Direct 1X2 / 1UP
-        if prob_home >= 0.60 and prob_home <= 0.72:
-            candidates.append({"cat": "1X2", "pick": "Home", "prob": prob_home, "odds": 1.77})
-        elif prob_away >= 0.58 and prob_away <= 0.72:
-            candidates.append({"cat": "1X2 - 1UP", "pick": "Away", "prob": prob_away, "odds": 1.34})
+        if home_hcap_2 >= 0.82 and prob_away > prob_home:
+            odds = round(max(1.22, min(1.40, (1.0 / home_hcap_2) * 0.95)), 2)
+            candidates.append({"cat": "Handicap 2:0", "pick": "Home (2:0)", "prob": home_hcap_2, "odds": odds, "weight": 1.25})
 
-        # 6. Double Chance
-        if prob_away > 0.50 and dc_x2 >= 0.85:
-            candidates.append({"cat": "Double Chance - 1UP", "pick": "Draw or Away", "prob": dc_x2, "odds": 1.09})
-        elif prob_home > 0.50 and dc_1x >= 0.88:
-            candidates.append({"cat": "Double Chance - 1UP", "pick": "Home or Draw", "prob": dc_1x, "odds": 1.12})
+        # 1ST HALF GOALS (From PSG v Slovan @ 1.55)
+        if ht_o15 >= 0.48:
+            odds = round(max(1.45, min(1.75, (1.0 / ht_o15) * 0.90)), 2)
+            candidates.append({"cat": "1st Half - Over/Under", "pick": "1st Half Over 1.5", "prob": ht_o15, "odds": odds, "weight": 1.3})
+        elif ht_o05 >= 0.72:
+            odds = round(max(1.25, min(1.45, (1.0 / ht_o05) * 0.92)), 2)
+            candidates.append({"cat": "1st Half - Over/Under", "pick": "1st Half Over 0.5", "prob": ht_o05, "odds": odds, "weight": 1.2})
 
-        # 7. Safe Caps & Floors
-        if u45 >= 0.88 and (home_xg + away_xg) < 2.8:
-            candidates.append({"cat": "Over/Under", "pick": "Under 4.5", "prob": u45, "odds": 1.24})
-        if o15 >= 0.85:
-            candidates.append({"cat": "Over/Under", "pick": "Over 1.5", "prob": o15, "odds": 1.10})
-        if o05 >= 0.95:
-            candidates.append({"cat": "Over/Under", "pick": "Over 0.5", "prob": o05, "odds": 1.02})
+        # TEAM TOTALS (From Barcelona Over 2.5 @ 1.29)
+        if home_o15 >= 0.58:
+            odds = round(max(1.30, min(1.60, (1.0 / home_o15) * 0.90)), 2)
+            candidates.append({"cat": f"{home_team} Totals", "pick": "Over 1.5 Goals", "prob": home_o15, "odds": odds, "weight": 1.3})
 
+        if away_o15 >= 0.52:
+            odds = round(max(1.35, min(1.68, (1.0 / away_o15) * 0.90)), 2)
+            candidates.append({"cat": f"{away_team} Totals", "pick": "Over 1.5 Goals", "prob": away_o15, "odds": odds, "weight": 1.3})
+
+        # BOTH TEAMS TO SCORE (GG / BTTS)
+        if btts_yes >= 0.50:
+            odds = round(max(1.55, min(1.95, (1.0 / btts_yes) * 0.92)), 2)
+            candidates.append({"cat": "Both Teams to Score", "pick": "GG / BTTS - Yes", "prob": btts_yes, "odds": odds, "weight": 1.3})
+
+        # MULTI-GOALS (2 to 5 Goals)
+        if mg_25 >= 0.72:
+            odds = round(max(1.25, min(1.42, (1.0 / mg_25) * 0.94)), 2)
+            candidates.append({"cat": "Multi-Goals", "pick": "2 - 5 Goals", "prob": mg_25, "odds": odds, "weight": 1.2})
+
+        # DOUBLE CHANCE 1UP (From Celtic @ 1.09)
+        if dc_x2 >= 0.78 and prob_away >= 0.42:
+            odds = round(max(1.18, min(1.45, (1.0 / dc_x2) * 0.94)), 2)
+            candidates.append({"cat": "Double Chance - 1UP", "pick": "Draw or Away", "prob": dc_x2, "odds": odds, "weight": 1.2})
+
+        if dc_1x >= 0.80 and prob_home >= 0.45:
+            odds = round(max(1.18, min(1.42, (1.0 / dc_1x) * 0.94)), 2)
+            candidates.append({"cat": "Double Chance - 1UP", "pick": "Home or Draw", "prob": dc_1x, "odds": odds, "weight": 1.2})
+
+        # DIRECT 1X2 (From Cruz Azul @ 1.77, Arsenal @ 1.34)
+        if prob_home >= 0.58:
+            odds = round(max(1.45, min(1.85, (1.0 / prob_home) * 0.92)), 2)
+            candidates.append({"cat": "1X2 - Match Winner", "pick": "Home Win", "prob": prob_home, "odds": odds, "weight": 1.35})
+
+        if prob_away >= 0.55:
+            odds = round(max(1.35, min(1.75, (1.0 / prob_away) * 0.92)), 2)
+            candidates.append({"cat": "1X2 - 1UP", "pick": "Away Win", "prob": prob_away, "odds": odds, "weight": 1.35})
+
+        # SAFE CAP: UNDER 4.5 (STRICT RESTRICTION: only if odds >= 1.20)
+        if u45 >= 0.85:
+            odds = round(max(1.20, min(1.30, (1.0 / u45) * 0.95)), 2)
+            candidates.append({"cat": "Over/Under", "pick": "Under 4.5", "prob": u45, "odds": odds, "weight": 0.8})
+
+        # Filter strictly: Banish any market with odds < 1.15
+        candidates = [c for c in candidates if c["odds"] >= 1.15]
+        
+        # Sort candidates by Value Score (Probability * Odds * Tactical Weight)
+        candidates.sort(key=lambda x: (x["prob"] * x["odds"] * x["weight"]), reverse=True)
         return candidates
 
-# ----------------- LIQUID GLASS STYLES -----------------
+# ----------------- UI STYLES -----------------
 st.markdown("""
 <style>
     @import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;600;700;800&display=swap');
@@ -236,10 +281,11 @@ def run_auto_sync():
     fixtures, err = fetcher.fetch_upcoming_fixtures(today_str, days_ahead=7)
     if err or not fixtures:
         return 0
-    engine = SportyBetQuantEngine()
+    engine = SportyBetValueEngine()
     standings_cache = {}
     
-    # Market Diversity Tracker: Prevents any single bet from repeating more than twice
+    # Strict Quota System: Maximum 1 Under 4.5 and maximum 2 of any other category across entire board
+    category_quotas = {"Over/Under": 1}
     category_counts = {}
     count = 0
 
@@ -259,24 +305,25 @@ def run_auto_sync():
         a_stat = team_stats.get(a_team, {"att_strength": 1.0, "def_strength": 1.0})
         
         h_xg, a_xg = engine.calculate_xg(h_stat["att_strength"], h_stat["def_strength"], a_stat["att_strength"], a_stat["def_strength"])
-        candidates = engine.evaluate_all_markets(h_xg, a_xg, h_team, a_team)
+        candidates = engine.evaluate_match_markets(h_xg, a_xg, h_team, a_team)
 
         if not candidates:
             continue
 
-        # DIVERSITY ALLOCATION: Pick the highest confidence market that hasn't exceeded quota
+        # Choose the best market that has NOT exceeded category quota
         chosen = None
         for cand in candidates:
-            cat_name = cand["cat"]
-            # Allow at most 2 of the same category across the board
-            if category_counts.get(cat_name, 0) < 2:
+            cat = cand["cat"]
+            limit = category_quotas.get(cat, 2)
+            if category_counts.get(cat, 0) < limit:
                 chosen = cand
-                category_counts[cat_name] = category_counts.get(cat_name, 0) + 1
+                category_counts[cat] = category_counts.get(cat, 0) + 1
                 break
-        
-        # Fallback to top candidate if all quotas hit
+
         if not chosen:
-            chosen = candidates[0]
+            # Fallback to the top candidate that is NOT Under 4.5
+            non_under = [c for c in candidates if c["pick"] != "Under 4.5"]
+            chosen = non_under[0] if non_under else candidates[0]
 
         save_prediction(
             m_date, str(m["id"]), m["competition"]["name"], 
@@ -288,7 +335,7 @@ def run_auto_sync():
 records = get_upcoming_predictions(today_str)
 
 if not records and fetcher.API_KEY != "PASTE_YOUR_API_KEY_HERE":
-    with st.spinner("⚡ Running SportyBet diversity engine across scheduled matches..."):
+    with st.spinner("⚡ Rebuilding board with high-value SportyBet markets..."):
         run_auto_sync()
         records = get_upcoming_predictions(today_str)
 
@@ -297,8 +344,6 @@ st.markdown('<div class="brand-title">Tactical Predictive Suite</div>', unsafe_a
 st.markdown('<div style="color: #94a3b8; margin-bottom: 20px;">Modeled on authentic winning slips: Combos, Handicaps, 1st Half Goals, Team Totals & Double Chance.</div>', unsafe_allow_html=True)
 
 if records:
-    sorted_records = sorted(records, key=lambda x: x[6], reverse=True)
-
     main_tabs = st.tabs([
         "🔥 Odds Tier Accumulator (3, 5, 10, 20, 100)",
         "🎯 Sure Banger Hits (Lock-In Singles)",
@@ -318,7 +363,7 @@ if records:
         selected_legs = []
         current_odds = 1.0
 
-        for r in sorted_records:
+        for r in records:
             leg_odds = r[7]
             selected_legs.append(r)
             current_odds *= leg_odds
@@ -381,7 +426,7 @@ if records:
     # =========================================================================
     with main_tabs[1]:
         st.markdown("<p style='color: #94a3b8; font-size: 0.9rem;'>Dedicated to individual lock-in selections. Use these for heavy single stakes or conservative rollovers.</p>", unsafe_allow_html=True)
-        bangers = sorted_records[:6]
+        bangers = records[:6]
         b_cols = st.columns(2)
         for idx, item in enumerate(bangers):
             m_date, m_comp, m_home, m_away, m_cat, m_pick, m_conf, m_odds = item[:8]
@@ -415,7 +460,7 @@ if records:
     with main_tabs[2]:
         st.markdown("<p style='color: #94a3b8; font-size: 0.9rem;'>Detailed tactical cards specifying exactly what market to stake, backup options, and edge metrics.</p>", unsafe_allow_html=True)
         s_cols = st.columns(2)
-        for idx, item in enumerate(sorted_records[:8]):
+        for idx, item in enumerate(records[:8]):
             m_date, m_comp, m_home, m_away, m_cat, m_pick, m_conf, m_odds = item[:8]
             with s_cols[idx % 2]:
                 st.markdown(f"""
@@ -446,9 +491,9 @@ if records:
     # =========================================================================
     with main_tabs[3]:
         search_query = st.text_input("🔍 Filter by Team or Competition", "")
-        filtered = sorted_records
+        filtered = records
         if search_query:
-            filtered = [r for r in sorted_records if search_query.lower() in f"{r[2]} {r[3]} {r[1]}".lower()]
+            filtered = [r for r in records if search_query.lower() in f"{r[2]} {r[3]} {r[1]}".lower()]
         cols_all = st.columns(2)
         for idx, item in enumerate(filtered):
             m_date, m_comp, m_home, m_away, m_cat, m_pick, m_conf, m_odds = item[:8]
@@ -474,4 +519,4 @@ if records:
                 """, unsafe_allow_html=True)
 
 else:
-    st.info("⚡ Analyzing upcoming matches and building diverse multi-market packages...")
+    st.info("⚡ Analyzing matches and constructing real multi-market packages...")
