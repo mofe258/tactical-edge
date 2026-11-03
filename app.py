@@ -13,10 +13,10 @@ st.set_page_config(
     initial_sidebar_state="collapsed"
 )
 
-# ----------------- DATABASE SETUP -----------------
+# ----------------- DATABASE CONFIG & AUTO-PURGE -----------------
 DB_NAME = "predictions.db"
-# Incrementing version auto-wipes old database records immediately
-ENGINE_VERSION = "v9_strict_dc_handicap_only"
+# Incrementing version forces database to purge all old team total records
+ENGINE_VERSION = "v10_strictly_double_chance_and_handicap"
 
 def init_db():
     conn = sqlite3.connect(DB_NAME)
@@ -84,7 +84,7 @@ def get_upcoming_predictions(start_date):
         c.execute("""SELECT match_date, competition, home_team, away_team, market_category, market_pick, confidence, est_odds, locked_at, extra_data 
                      FROM predictions 
                      WHERE match_date >= ? 
-                     ORDER BY (confidence * est_odds) DESC""", (start_date,))
+                     ORDER BY confidence DESC""", (start_date,))
         rows = c.fetchall()
         conn.close()
         return rows
@@ -123,78 +123,55 @@ class StrictDCHandicapEngine:
         prob_draw = float(np.sum(np.diag(matrix)))
         prob_away = float(np.sum(np.triu(matrix, 1)))
 
-        # 1. DOUBLE CHANCE
+        # 1. DOUBLE CHANCE ONLY
         dc_1x = prob_home + prob_draw
         dc_x2 = prob_away + prob_draw
-        dc_12 = prob_home + prob_away
 
-        # 2. HANDICAP CUSHIONS
+        # 2. HANDICAP CUSHIONS ONLY
         away_hcap_2 = float(np.sum([matrix[h][a] for h in range(max_goals) for a in range(max_goals) if (h - a) < 2]))
         away_hcap_3 = float(np.sum([matrix[h][a] for h in range(max_goals) for a in range(max_goals) if (h - a) < 3]))
         home_hcap_2 = float(np.sum([matrix[h][a] for h in range(max_goals) for a in range(max_goals) if (a - h) < 2]))
 
-        # 3. OVER 1.5 GOALS
-        match_o15 = float(1.0 - (matrix[0][0] + matrix[1][0] + matrix[0][1]))
-        home_o15 = float(1.0 - poisson.cdf(1, home_xg))
-        away_o15 = float(1.0 - poisson.cdf(1, away_xg))
+        # Format Double Chance Pick
+        if prob_away >= prob_home:
+            dc_pick = "Draw or Away (X2)"
+            dc_prob = dc_x2
+            dc_odds = round(max(1.18, min(1.48, (1.0 / dc_prob) * 0.94)), 2)
+        else:
+            dc_pick = "Home or Draw (1X)"
+            dc_prob = dc_1x
+            dc_odds = round(max(1.18, min(1.45, (1.0 / dc_prob) * 0.94)), 2)
 
-        # Build clean market package for this match
-        dc_pick = "Draw or Away (X2)" if prob_away >= prob_home else "Home or Draw (1X)"
-        dc_prob = dc_x2 if prob_away >= prob_home else dc_1x
-        dc_odds = round(max(1.15, min(1.48, (1.0 / dc_prob) * 0.94)), 2)
-
+        # Format Handicap Pick
         if prob_home >= prob_away:
-            hcap_pick = "Handicap Away (0:3)" if away_hcap_3 >= 0.88 else "Handicap Away (0:2)"
-            hcap_prob = away_hcap_3 if away_hcap_3 >= 0.88 else away_hcap_2
-            hcap_odds = 1.18 if "0:3" in hcap_pick else 1.28
+            if away_hcap_3 >= 0.88:
+                hcap_pick = "Handicap Away (0:3)"
+                hcap_prob = away_hcap_3
+                hcap_odds = 1.18
+            else:
+                hcap_pick = "Handicap Away (0:2)"
+                hcap_prob = away_hcap_2
+                hcap_odds = 1.28
         else:
             hcap_pick = "Handicap Home (2:0)"
             hcap_prob = home_hcap_2
-            hcap_odds = 1.25
+            hcap_odds = 1.24
 
-        o15_pick = "Match Total: Over 1.5"
-        o15_prob = match_o15
-        o15_odds = round(max(1.18, min(1.38, (1.0 / match_o15) * 0.94)), 2)
-
-        if home_o15 >= 0.65:
-            team_o15_pick = f"{home_team}: Over 1.5 Goals"
-            team_o15_prob = home_o15
-            team_o15_odds = round(max(1.30, min(1.65, (1.0 / home_o15) * 0.92)), 2)
-        else:
-            team_o15_pick = f"{away_team}: Over 1.5 Goals"
-            team_o15_prob = away_o15
-            team_o15_odds = round(max(1.32, min(1.68, (1.0 / away_o15) * 0.92)), 2)
-
-        # Alternating Primary Selection (Double Chance, Handicap, and Over 1.5)
-        # Guarantees a dynamic balance across the board
-        mode = index % 3
-        if mode == 0:
+        # Alternate cleanly between Double Chance and Handicap (NO OTHER MARKETS)
+        if index % 2 == 0:
             primary_cat = "Double Chance - 1UP"
             primary_pick = dc_pick
             primary_prob = dc_prob
             primary_odds = dc_odds
-        elif mode == 1:
+        else:
             primary_cat = "Asian / Euro Handicap"
             primary_pick = hcap_pick
             primary_prob = hcap_prob
             primary_odds = hcap_odds
-        else:
-            if home_o15 >= 0.65 or away_o15 >= 0.60:
-                primary_cat = "Team Total - Over 1.5"
-                primary_pick = team_o15_pick
-                primary_prob = team_o15_prob
-                primary_odds = team_o15_odds
-            else:
-                primary_cat = "Match Total - Over 1.5"
-                primary_pick = o15_pick
-                primary_prob = o15_prob
-                primary_odds = o15_odds
 
         extra_json = json.dumps({
             "dc_pick": dc_pick, "dc_odds": dc_odds, "dc_prob": round(dc_prob * 100, 1),
-            "hcap_pick": hcap_pick, "hcap_odds": hcap_odds, "hcap_prob": round(hcap_prob * 100, 1),
-            "o15_pick": o15_pick, "o15_odds": o15_odds, "o15_prob": round(o15_prob * 100, 1),
-            "team_o15_pick": team_o15_pick, "team_o15_odds": team_o15_odds, "team_o15_prob": round(team_o15_prob * 100, 1)
+            "hcap_pick": hcap_pick, "hcap_odds": hcap_odds, "hcap_prob": round(hcap_prob * 100, 1)
         })
 
         return {
@@ -234,7 +211,7 @@ st.markdown("""
         margin-bottom: 18px;
     }
 
-    .market-badge { display: inline-block; font-size: 0.72rem; font-weight: 700; padding: 3px 8px; border-radius: 6px; background: rgba(239, 68, 68, 0.15); border: 1px solid rgba(239, 68, 68, 0.3); color: #f87171; text-transform: uppercase; margin-bottom: 6px; }
+    .market-badge { display: inline-block; font-size: 0.72rem; font-weight: 700; padding: 3px 8px; border-radius: 6px; background: rgba(56, 189, 248, 0.15); border: 1px solid rgba(56, 189, 248, 0.3); color: #38bdf8; text-transform: uppercase; margin-bottom: 6px; }
     .tag-prob { display: inline-block; padding: 4px 10px; background: rgba(56, 189, 248, 0.15); border: 1px solid rgba(56, 189, 248, 0.4); color: #38bdf8; border-radius: 8px; font-weight: 700; font-size: 0.85rem; }
     .tag-odds { display: inline-block; padding: 4px 10px; background: rgba(245, 158, 11, 0.15); border: 1px solid rgba(245, 158, 11, 0.4); color: #fbbf24; border-radius: 8px; font-weight: 700; font-size: 0.85rem; }
     
@@ -242,7 +219,7 @@ st.markdown("""
         background: rgba(0, 0, 0, 0.25);
         border: 1px solid rgba(255, 255, 255, 0.06);
         border-radius: 10px;
-        padding: 10px 14px;
+        padding: 12px 14px;
         margin-top: 10px;
         display: flex;
         justify-content: space-between;
@@ -297,7 +274,7 @@ if not records and fetcher.API_KEY != "PASTE_YOUR_API_KEY_HERE":
 
 # ----------------- MAIN INTERFACE -----------------
 st.markdown('<div class="brand-title">Tactical Predictive Suite</div>', unsafe_allow_html=True)
-st.markdown('<div style="color: #94a3b8; margin-bottom: 20px;">Exclusively focused on <b>Double Chance</b>, <b>Handicap Cushions</b>, and <b>Team/Match Over 1.5</b>.</div>', unsafe_allow_html=True)
+st.markdown('<div style="color: #94a3b8; margin-bottom: 20px;">Strictly <b>Double Chance</b> and <b>Handicap Cushions</b> for real-money compound staking.</div>', unsafe_allow_html=True)
 
 if records:
     main_tabs = st.tabs([
@@ -308,10 +285,10 @@ if records:
     ])
 
     # =========================================================================
-    # TAB 1: ODDS TIER ACCUMULATOR BUILDER
+    # TAB 1: ODDS TIER ACCUMULATOR BUILDER (STRICTLY DC & HANDICAP)
     # =========================================================================
     with main_tabs[0]:
-        st.markdown("<p style='color: #94a3b8; font-size: 0.9rem;'>Select your targeted odds tier. Strictly compounded using Double Chance and Handicap cushions.</p>", unsafe_allow_html=True)
+        st.markdown("<p style='color: #94a3b8; font-size: 0.9rem;'>Accumulator slips compounded <b>strictly using Double Chance and Handicap cushions</b>.</p>", unsafe_allow_html=True)
         tier = st.radio("Choose Target Odds:", ["3 Odds", "5 Odds", "10 Odds", "20 Odds", "100 Odds"], horizontal=True)
         target_dict = {"3 Odds": 3.0, "5 Odds": 5.0, "10 Odds": 10.0, "20 Odds": 20.0, "100 Odds": 100.0}
         target_val = target_dict[tier]
@@ -365,8 +342,8 @@ if records:
                     <div>
                         <div style="font-size: 0.7rem; color: #94a3b8;">{m_comp} &nbsp;•&nbsp; 🗓️ {m_date}</div>
                         <div style="font-weight: 700; color: #fff; font-size: 0.95rem;">{m_home} vs {m_away}</div>
-                        <div style="font-size: 0.68rem; color: #f87171; text-transform: uppercase; font-weight: 700; margin-top: 2px;">{m_cat}</div>
-                        <div style="color: #38bdf8; font-weight: 800; font-size: 0.95rem;">👉 {m_pick}</div>
+                        <div style="font-size: 0.68rem; color: #38bdf8; text-transform: uppercase; font-weight: 700; margin-top: 2px;">{m_cat}</div>
+                        <div style="color: #34d399; font-weight: 800; font-size: 1rem;">👉 {m_pick}</div>
                     </div>
                     <div style="text-align: right;">
                         <span class="tag-prob">{m_conf * 100:.1f}%</span>
@@ -378,7 +355,7 @@ if records:
         st.markdown("</div>", unsafe_allow_html=True)
 
     # =========================================================================
-    # TAB 2: SURE BANGER HITS
+    # TAB 2: SURE BANGER HITS (LOCK-IN SINGLES)
     # =========================================================================
     with main_tabs[1]:
         st.markdown("<p style='color: #94a3b8; font-size: 0.9rem;'>Dedicated to high-confidence Double Chance and Handicap locks.</p>", unsafe_allow_html=True)
@@ -386,8 +363,6 @@ if records:
         b_cols = st.columns(2)
         for idx, item in enumerate(bangers):
             m_date, m_comp, m_home, m_away, m_cat, m_pick, m_conf, m_odds = item[:8]
-            extra = json.loads(item[9]) if len(item) > 9 and item[9] else {}
-            
             with b_cols[idx % 2]:
                 st.markdown(f"""
                 <div class="glass-card" style="border-left: 4px solid #10b981;">
@@ -399,7 +374,7 @@ if records:
                         {m_home} <span style="color: #64748b; font-size: 1rem;">vs</span> {m_away}
                     </div>
                     <span class="market-badge">{m_cat}</span>
-                    <div style="background: rgba(16, 185, 129, 0.1); border: 1px solid rgba(16, 185, 129, 0.3); border-radius: 10px; padding: 10px 14px; margin-top: 6px; display: flex; justify-content: space-between; align-items: center;">
+                    <div style="background: rgba(16, 185, 129, 0.1); border: 1px solid rgba(16, 185, 129, 0.3); border-radius: 10px; padding: 12px 14px; margin-top: 6px; display: flex; justify-content: space-between; align-items: center;">
                         <div>
                             <div style="font-size: 0.65rem; color: #94a3b8; text-transform: uppercase;">🎯 BANGER SELECTION</div>
                             <div style="color: #34d399; font-weight: 800; font-size: 1.15rem;">{m_pick}</div>
@@ -413,7 +388,7 @@ if records:
                 """, unsafe_allow_html=True)
 
     # =========================================================================
-    # TAB 3: SURE FIXTURES (SHOWING BOTH DC & HANDICAP TOGETHER)
+    # TAB 3: SURE FIXTURES (DOUBLE CHANCE & HANDICAP SIDE-BY-SIDE)
     # =========================================================================
     with main_tabs[2]:
         st.markdown("<p style='color: #94a3b8; font-size: 0.9rem;'>Every match displaying both <b>Double Chance</b> and <b>Handicap Cushion</b> options.</p>", unsafe_allow_html=True)
@@ -429,10 +404,6 @@ if records:
             hcap_pick = extra.get("hcap_pick", "Handicap Away (0:3)")
             hcap_odds = extra.get("hcap_odds", 1.18)
             hcap_prob = extra.get("hcap_prob", 90.0)
-
-            o15_pick = extra.get("team_o15_pick", "Match Total: Over 1.5")
-            o15_odds = extra.get("team_o15_odds", 1.30)
-            o15_prob = extra.get("team_o15_prob", 78.0)
 
             with s_cols[idx % 2]:
                 st.markdown(f"""
@@ -466,18 +437,6 @@ if records:
                         <div style="text-align: right;">
                             <span style="color: #fbbf24; font-weight: 800; font-size: 1rem;">@{hcap_odds:.2f}</span>
                             <span style="color: #94a3b8; font-size: 0.72rem; display: block;">{hcap_prob}%</span>
-                        </div>
-                    </div>
-
-                    <!-- Option 3: Over 1.5 Goals -->
-                    <div class="dual-box">
-                        <div>
-                            <span style="font-size: 0.65rem; color: #f87171; font-weight: 700; display: block;">⚽ OVER 1.5 GOALS</span>
-                            <span style="font-weight: 800; color: #fff; font-size: 0.95rem;">{o15_pick}</span>
-                        </div>
-                        <div style="text-align: right;">
-                            <span style="color: #fbbf24; font-weight: 800; font-size: 1rem;">@{o15_odds:.2f}</span>
-                            <span style="color: #94a3b8; font-size: 0.72rem; display: block;">{o15_prob}%</span>
                         </div>
                     </div>
                 </div>
@@ -516,4 +475,4 @@ if records:
                 """, unsafe_allow_html=True)
 
 else:
-    st.info("⚡ Analyzing matches for Double Chance, Handicap, and Over 1.5 lines...")
+    st.info("⚡ Analyzing matches for Double Chance and Handicap lines...")
