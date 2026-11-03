@@ -1,14 +1,14 @@
 import requests
 from datetime import datetime, timedelta
 
+# 👉 PASTE YOUR ACTUAL API KEY INSIDE THE QUOTES BELOW:
+API_KEY = "5927ac0ce29e40748c8efca8cacf0f60"
+
 BASE_URL = "https://api.football-data.org/v4"
 
-def fetch_upcoming_fixtures(api_key, start_date_str, days_ahead=7):
-    """
-    Fetches matches across a multi-day window (default next 7 days)
-    so you always have upcoming games to stake on.
-    """
-    headers = {"X-Auth-Token": api_key.strip()}
+def fetch_upcoming_fixtures(start_date_str, days_ahead=7):
+    """Fetches matches across the upcoming week using the embedded key."""
+    headers = {"X-Auth-Token": API_KEY.strip()}
     
     start_dt = datetime.strptime(start_date_str, "%Y-%m-%d")
     end_dt = start_dt + timedelta(days=days_ahead)
@@ -23,15 +23,15 @@ def fetch_upcoming_fixtures(api_key, start_date_str, days_ahead=7):
         elif res.status_code == 403:
             return [], "API Key Error: Invalid or inactive API key."
         elif res.status_code == 429:
-            return [], "Rate limit reached: Free plan allows 10 calls per minute."
+            return [], "Rate limit: Maximum 10 requests per minute."
         else:
             return [], f"API returned status code: {res.status_code}"
     except Exception as e:
         return [], f"Connection error: {str(e)}"
 
-def fetch_standings(api_key, competition_code):
-    """Fetches league standings to calculate attack and defense metrics."""
-    headers = {"X-Auth-Token": api_key.strip()}
+def fetch_standings(competition_code):
+    """Fetches team statistics for calculations."""
+    headers = {"X-Auth-Token": API_KEY.strip()}
     url = f"{BASE_URL}/competitions/{competition_code}/standings"
     try:
         res = requests.get(url, headers=headers, timeout=10)
