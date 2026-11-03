@@ -14,7 +14,7 @@ st.set_page_config(
 
 db.init_db()
 
-# ----------------- LIQUID GLASS STYLES -----------------
+# ----------------- LIQUID GLASS STYLING -----------------
 st.markdown("""
 <style>
     @import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;600;700;800&display=swap');
@@ -67,40 +67,11 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# ----------------- SAFE API KEY RETRIEVAL -----------------
-saved_api_key = ""
-if hasattr(db, "get_setting"):
-    saved_api_key = db.get_setting("FOOTBALL_API_KEY", "")
+# ----------------- AUTO-SYNC PIPELINE -----------------
+today_str = date.today().strftime("%Y-%m-%d")
 
-if not saved_api_key:
-    try:
-        if hasattr(st, "secrets") and "FOOTBALL_API_KEY" in st.secrets:
-            saved_api_key = st.secrets["FOOTBALL_API_KEY"]
-    except Exception:
-        pass
-
-with st.sidebar:
-    st.markdown("### ⚙️ Engine Settings")
-    input_key = st.text_input("football-data.org API Key", value=saved_api_key, type="password")
-    if input_key and input_key != saved_api_key:
-        if hasattr(db, "set_setting"):
-            db.set_setting("FOOTBALL_API_KEY", input_key)
-        saved_api_key = input_key
-        st.success("API Key saved permanently!")
-
-    min_confidence = st.slider("Min Probability Threshold (%)", min_value=60, max_value=85, value=70, step=1) / 100.0
-    scan_days = 7
-    today_str = date.today().strftime("%Y-%m-%d")
-
-    st.markdown("---")
-    st.caption("🟢 **Auto-Pilot:** Active\n\nPicks update automatically in the background.")
-    if st.button("🔄 Force Refresh Cache"):
-        st.session_state["force_refresh"] = True
-        st.rerun()
-
-# ----------------- AUTO-PILOT PIPELINE -----------------
-def execute_auto_sync(api_key, start_date, days_ahead, threshold):
-    fixtures, err = fetcher.fetch_upcoming_fixtures(api_key, start_date, days_ahead=days_ahead)
+def run_auto_sync():
+    fixtures, err = fetcher.fetch_upcoming_fixtures(today_str, days_ahead=7)
     if err or not fixtures:
         return 0
     engine = FootballEngine()
@@ -112,7 +83,7 @@ def execute_auto_sync(api_key, start_date, days_ahead, threshold):
             continue
         m_date = m.get("utcDate", "")[:10]
         if comp_code not in standings_cache:
-            standings_cache[comp_code] = fetcher.fetch_standings(api_key, comp_code)
+            standings_cache[comp_code] = fetcher.fetch_standings(comp_code)
             
         team_stats = standings_cache[comp_code]
         h_team = m["homeTeam"]["name"]
@@ -126,26 +97,21 @@ def execute_auto_sync(api_key, start_date, days_ahead, threshold):
         safest_market = max(probs, key=probs.get)
         safest_prob = probs[safest_market]
 
-        if safest_prob >= threshold:
+        if safest_prob >= 0.70:
             db.save_prediction(m_date, str(m["id"]), m["competition"]["name"], h_team, a_team, safest_market, safest_prob)
             count += 1
     return count
 
-# Fetch existing predictions safely
-today_str = date.today().strftime("%Y-%m-%d")
-records = []
-if hasattr(db, "get_upcoming_predictions"):
-    records = db.get_upcoming_predictions(today_str)
+# Fetch existing predictions from DB
+records = db.get_upcoming_predictions(today_str)
 
-# Auto-Sync trigger if empty or forced
-if (not records or st.session_state.get("force_refresh", False)) and saved_api_key:
-    st.session_state["force_refresh"] = False
+# If database is empty, auto-run sync in the background
+if not records and fetcher.API_KEY != "PASTE_YOUR_API_KEY_HERE":
     with st.spinner("⚡ Auto-analyzing matches and locking today's daily predictions..."):
-        execute_auto_sync(saved_api_key, today_str, scan_days, min_confidence)
-        if hasattr(db, "get_upcoming_predictions"):
-            records = db.get_upcoming_predictions(today_str)
+        run_auto_sync()
+        records = db.get_upcoming_predictions(today_str)
 
-# ----------------- MAIN DISPLAY -----------------
+# ----------------- MAIN ZERO-CLICK DASHBOARD -----------------
 st.markdown('<div class="brand-title">Tactical Predictive Suite</div>', unsafe_allow_html=True)
 st.markdown('<div style="color: #94a3b8; margin-bottom: 25px;">Statistically optimized selections with immutable database locks.</div>', unsafe_allow_html=True)
 
@@ -241,10 +207,10 @@ if records:
 else:
     st.markdown("""
     <div class="glass-card" style="text-align: center; padding: 50px 20px;">
-        <div style="font-size: 2.5rem; margin-bottom: 15px;">⚡</div>
-        <div style="font-size: 1.25rem; font-weight: 700; color: #ffffff;">Auto-Pilot Ready</div>
+        <div style="font-size: 2.5rem; margin-bottom: 15px;">⏳</div>
+        <div style="font-size: 1.25rem; font-weight: 700; color: #ffffff;">Fetching Match Board...</div>
         <div style="color: #94a3b8; font-size: 0.9rem; max-width: 450px; margin: 10px auto 15px auto;">
-            Paste your API key once in the sidebar. The engine will permanently store it and automatically load matches on arrival.
+            Analyzing scheduled matches for the week. Please refresh in a few moments.
         </div>
     </div>
     """, unsafe_allow_html=True)
