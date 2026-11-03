@@ -7,16 +7,16 @@ from scipy.stats import poisson
 import fetcher
 
 st.set_page_config(
-    page_title="Tactical Edge | SportyBet Value Suite",
+    page_title="Tactical Edge | DC & Handicap Suite",
     page_icon="⚡",
     layout="wide",
     initial_sidebar_state="collapsed"
 )
 
-# ----------------- DATABASE CONFIG & AUTO-PURGE -----------------
+# ----------------- DATABASE SETUP -----------------
 DB_NAME = "predictions.db"
-# Changing version wipes all old 1.02/Under 4.5 junk records instantly
-ENGINE_VERSION = "v8_pure_sporty_value_engine"
+# Incrementing version auto-wipes old database records immediately
+ENGINE_VERSION = "v9_strict_dc_handicap_only"
 
 def init_db():
     conn = sqlite3.connect(DB_NAME)
@@ -81,7 +81,6 @@ def get_upcoming_predictions(start_date):
     conn = sqlite3.connect(DB_NAME)
     c = conn.cursor()
     try:
-        # Sort by Value Score (Confidence * Odds) so high-return combos rise to the top
         c.execute("""SELECT match_date, competition, home_team, away_team, market_category, market_pick, confidence, est_odds, locked_at, extra_data 
                      FROM predictions 
                      WHERE match_date >= ? 
@@ -103,8 +102,8 @@ if get_setting("engine_version") != ENGINE_VERSION:
     clear_all()
     set_setting("engine_version", ENGINE_VERSION)
 
-# ----------------- REAL SPORTYBET VALUE ENGINE -----------------
-class SportyBetValueEngine:
+# ----------------- STRICT DC & HANDICAP ENGINE -----------------
+class StrictDCHandicapEngine:
     def __init__(self, league_avg_home=1.45, league_avg_away=1.15):
         self.league_avg_home = league_avg_home
         self.league_avg_away = league_avg_away
@@ -114,7 +113,7 @@ class SportyBetValueEngine:
         away_xg = max(0.3, away_att * home_def * self.league_avg_away)
         return home_xg, away_xg
 
-    def evaluate_match_markets(self, home_xg, away_xg, home_team, away_team, max_goals=7):
+    def evaluate(self, home_xg, away_xg, home_team, away_team, index=0, max_goals=7):
         matrix = np.zeros((max_goals, max_goals))
         for h in range(max_goals):
             for a in range(max_goals):
@@ -124,119 +123,87 @@ class SportyBetValueEngine:
         prob_draw = float(np.sum(np.diag(matrix)))
         prob_away = float(np.sum(np.triu(matrix, 1)))
 
+        # 1. DOUBLE CHANCE
         dc_1x = prob_home + prob_draw
         dc_x2 = prob_away + prob_draw
+        dc_12 = prob_home + prob_away
 
-        # 1. Combos: 1X2 & Over/Under
-        h_and_o15 = float(np.sum([matrix[h][a] for h in range(max_goals) for a in range(max_goals) if h > a and (h + a >= 2)]))
-        a_and_o15 = float(np.sum([matrix[h][a] for h in range(max_goals) for a in range(max_goals) if a > h and (h + a >= 2)]))
-        h_and_o25 = float(np.sum([matrix[h][a] for h in range(max_goals) for a in range(max_goals) if h > a and (h + a >= 3)]))
-
-        # 2. Both Teams To Score (BTTS / GG)
-        btts_yes = float(np.sum([matrix[h][a] for h in range(1, max_goals) for a in range(1, max_goals)]))
-
-        # 3. 1st Half Goals (First 45 min averages ~45% of total goals)
-        exp_ht = 0.45 * (home_xg + away_xg)
-        ht_o15 = float(1.0 - poisson.cdf(1, exp_ht))
-        ht_o05 = float(1.0 - poisson.pmf(0, exp_ht))
-
-        # 4. Multi-Goals (2 to 5 goals)
-        mg_25 = float(np.sum([matrix[h][a] for h in range(max_goals) for a in range(max_goals) if 2 <= (h + a) <= 5]))
-
-        # 5. Team Totals
-        home_o15 = float(1.0 - poisson.cdf(1, home_xg))
-        away_o15 = float(1.0 - poisson.cdf(1, away_xg))
-
-        # 6. Handicaps (0:2 and 0:3)
+        # 2. HANDICAP CUSHIONS
         away_hcap_2 = float(np.sum([matrix[h][a] for h in range(max_goals) for a in range(max_goals) if (h - a) < 2]))
         away_hcap_3 = float(np.sum([matrix[h][a] for h in range(max_goals) for a in range(max_goals) if (h - a) < 3]))
         home_hcap_2 = float(np.sum([matrix[h][a] for h in range(max_goals) for a in range(max_goals) if (a - h) < 2]))
 
-        # 7. Safe Caps
-        u45 = float(np.sum([matrix[h][a] for h in range(max_goals) for a in range(max_goals) if h + a <= 4]))
+        # 3. OVER 1.5 GOALS
+        match_o15 = float(1.0 - (matrix[0][0] + matrix[1][0] + matrix[0][1]))
+        home_o15 = float(1.0 - poisson.cdf(1, home_xg))
+        away_o15 = float(1.0 - poisson.cdf(1, away_xg))
 
-        candidates = []
+        # Build clean market package for this match
+        dc_pick = "Draw or Away (X2)" if prob_away >= prob_home else "Home or Draw (1X)"
+        dc_prob = dc_x2 if prob_away >= prob_home else dc_1x
+        dc_odds = round(max(1.15, min(1.48, (1.0 / dc_prob) * 0.94)), 2)
 
-        # --- TACTICAL MARKET GENERATION (NO OVER 0.5 JUNK ALLOWED) ---
-        
-        # COMBOS (From Chelsea v Leeds @ 1.68, Al Nassr @ 1.32, Benfica @ 1.26)
-        if h_and_o15 >= 0.45:
-            odds = round(max(1.45, min(1.85, (1.0 / h_and_o15) * 0.90)), 2)
-            candidates.append({"cat": "1X2 & Over/Under 1.5", "pick": "Home & Over 1.5", "prob": h_and_o15, "odds": odds, "weight": 1.4})
+        if prob_home >= prob_away:
+            hcap_pick = "Handicap Away (0:3)" if away_hcap_3 >= 0.88 else "Handicap Away (0:2)"
+            hcap_prob = away_hcap_3 if away_hcap_3 >= 0.88 else away_hcap_2
+            hcap_odds = 1.18 if "0:3" in hcap_pick else 1.28
+        else:
+            hcap_pick = "Handicap Home (2:0)"
+            hcap_prob = home_hcap_2
+            hcap_odds = 1.25
 
-        if a_and_o15 >= 0.40:
-            odds = round(max(1.35, min(1.75, (1.0 / a_and_o15) * 0.90)), 2)
-            candidates.append({"cat": "1X2 & Over/Under 1.5", "pick": "Away & Over 1.5", "prob": a_and_o15, "odds": odds, "weight": 1.35})
+        o15_pick = "Match Total: Over 1.5"
+        o15_prob = match_o15
+        o15_odds = round(max(1.18, min(1.38, (1.0 / match_o15) * 0.94)), 2)
 
-        if h_and_o25 >= 0.42:
-            odds = round(max(1.30, min(1.68, (1.0 / h_and_o25) * 0.90)), 2)
-            candidates.append({"cat": "1X2 & Over/Under 2.5", "pick": "Home & Over 2.5", "prob": h_and_o25, "odds": odds, "weight": 1.3})
+        if home_o15 >= 0.65:
+            team_o15_pick = f"{home_team}: Over 1.5 Goals"
+            team_o15_prob = home_o15
+            team_o15_odds = round(max(1.30, min(1.65, (1.0 / home_o15) * 0.92)), 2)
+        else:
+            team_o15_pick = f"{away_team}: Over 1.5 Goals"
+            team_o15_prob = away_o15
+            team_o15_odds = round(max(1.32, min(1.68, (1.0 / away_o15) * 0.92)), 2)
 
-        # HANDICAPS (From Galatasaray +3 @ 1.16, Viking FK +4 @ 1.22)
-        if away_hcap_3 >= 0.85 and prob_home > prob_away:
-            odds = round(max(1.18, min(1.32, (1.0 / away_hcap_3) * 0.95)), 2)
-            candidates.append({"cat": "Handicap 0:3", "pick": "Away (0:3)", "prob": away_hcap_3, "odds": odds, "weight": 1.25})
+        # Alternating Primary Selection (Double Chance, Handicap, and Over 1.5)
+        # Guarantees a dynamic balance across the board
+        mode = index % 3
+        if mode == 0:
+            primary_cat = "Double Chance - 1UP"
+            primary_pick = dc_pick
+            primary_prob = dc_prob
+            primary_odds = dc_odds
+        elif mode == 1:
+            primary_cat = "Asian / Euro Handicap"
+            primary_pick = hcap_pick
+            primary_prob = hcap_prob
+            primary_odds = hcap_odds
+        else:
+            if home_o15 >= 0.65 or away_o15 >= 0.60:
+                primary_cat = "Team Total - Over 1.5"
+                primary_pick = team_o15_pick
+                primary_prob = team_o15_prob
+                primary_odds = team_o15_odds
+            else:
+                primary_cat = "Match Total - Over 1.5"
+                primary_pick = o15_pick
+                primary_prob = o15_prob
+                primary_odds = o15_odds
 
-        if home_hcap_2 >= 0.82 and prob_away > prob_home:
-            odds = round(max(1.22, min(1.40, (1.0 / home_hcap_2) * 0.95)), 2)
-            candidates.append({"cat": "Handicap 2:0", "pick": "Home (2:0)", "prob": home_hcap_2, "odds": odds, "weight": 1.25})
+        extra_json = json.dumps({
+            "dc_pick": dc_pick, "dc_odds": dc_odds, "dc_prob": round(dc_prob * 100, 1),
+            "hcap_pick": hcap_pick, "hcap_odds": hcap_odds, "hcap_prob": round(hcap_prob * 100, 1),
+            "o15_pick": o15_pick, "o15_odds": o15_odds, "o15_prob": round(o15_prob * 100, 1),
+            "team_o15_pick": team_o15_pick, "team_o15_odds": team_o15_odds, "team_o15_prob": round(team_o15_prob * 100, 1)
+        })
 
-        # 1ST HALF GOALS (From PSG v Slovan @ 1.55)
-        if ht_o15 >= 0.48:
-            odds = round(max(1.45, min(1.75, (1.0 / ht_o15) * 0.90)), 2)
-            candidates.append({"cat": "1st Half - Over/Under", "pick": "1st Half Over 1.5", "prob": ht_o15, "odds": odds, "weight": 1.3})
-        elif ht_o05 >= 0.72:
-            odds = round(max(1.25, min(1.45, (1.0 / ht_o05) * 0.92)), 2)
-            candidates.append({"cat": "1st Half - Over/Under", "pick": "1st Half Over 0.5", "prob": ht_o05, "odds": odds, "weight": 1.2})
-
-        # TEAM TOTALS (From Barcelona Over 2.5 @ 1.29)
-        if home_o15 >= 0.58:
-            odds = round(max(1.30, min(1.60, (1.0 / home_o15) * 0.90)), 2)
-            candidates.append({"cat": f"{home_team} Totals", "pick": "Over 1.5 Goals", "prob": home_o15, "odds": odds, "weight": 1.3})
-
-        if away_o15 >= 0.52:
-            odds = round(max(1.35, min(1.68, (1.0 / away_o15) * 0.90)), 2)
-            candidates.append({"cat": f"{away_team} Totals", "pick": "Over 1.5 Goals", "prob": away_o15, "odds": odds, "weight": 1.3})
-
-        # BOTH TEAMS TO SCORE (GG / BTTS)
-        if btts_yes >= 0.50:
-            odds = round(max(1.55, min(1.95, (1.0 / btts_yes) * 0.92)), 2)
-            candidates.append({"cat": "Both Teams to Score", "pick": "GG / BTTS - Yes", "prob": btts_yes, "odds": odds, "weight": 1.3})
-
-        # MULTI-GOALS (2 to 5 Goals)
-        if mg_25 >= 0.72:
-            odds = round(max(1.25, min(1.42, (1.0 / mg_25) * 0.94)), 2)
-            candidates.append({"cat": "Multi-Goals", "pick": "2 - 5 Goals", "prob": mg_25, "odds": odds, "weight": 1.2})
-
-        # DOUBLE CHANCE 1UP (From Celtic @ 1.09)
-        if dc_x2 >= 0.78 and prob_away >= 0.42:
-            odds = round(max(1.18, min(1.45, (1.0 / dc_x2) * 0.94)), 2)
-            candidates.append({"cat": "Double Chance - 1UP", "pick": "Draw or Away", "prob": dc_x2, "odds": odds, "weight": 1.2})
-
-        if dc_1x >= 0.80 and prob_home >= 0.45:
-            odds = round(max(1.18, min(1.42, (1.0 / dc_1x) * 0.94)), 2)
-            candidates.append({"cat": "Double Chance - 1UP", "pick": "Home or Draw", "prob": dc_1x, "odds": odds, "weight": 1.2})
-
-        # DIRECT 1X2 (From Cruz Azul @ 1.77, Arsenal @ 1.34)
-        if prob_home >= 0.58:
-            odds = round(max(1.45, min(1.85, (1.0 / prob_home) * 0.92)), 2)
-            candidates.append({"cat": "1X2 - Match Winner", "pick": "Home Win", "prob": prob_home, "odds": odds, "weight": 1.35})
-
-        if prob_away >= 0.55:
-            odds = round(max(1.35, min(1.75, (1.0 / prob_away) * 0.92)), 2)
-            candidates.append({"cat": "1X2 - 1UP", "pick": "Away Win", "prob": prob_away, "odds": odds, "weight": 1.35})
-
-        # SAFE CAP: UNDER 4.5 (STRICT RESTRICTION: only if odds >= 1.20)
-        if u45 >= 0.85:
-            odds = round(max(1.20, min(1.30, (1.0 / u45) * 0.95)), 2)
-            candidates.append({"cat": "Over/Under", "pick": "Under 4.5", "prob": u45, "odds": odds, "weight": 0.8})
-
-        # Filter strictly: Banish any market with odds < 1.15
-        candidates = [c for c in candidates if c["odds"] >= 1.15]
-        
-        # Sort candidates by Value Score (Probability * Odds * Tactical Weight)
-        candidates.sort(key=lambda x: (x["prob"] * x["odds"] * x["weight"]), reverse=True)
-        return candidates
+        return {
+            "cat": primary_cat,
+            "pick": primary_pick,
+            "prob": primary_prob,
+            "odds": primary_odds,
+            "extra": extra_json
+        }
 
 # ----------------- UI STYLES -----------------
 st.markdown("""
@@ -267,9 +234,20 @@ st.markdown("""
         margin-bottom: 18px;
     }
 
+    .market-badge { display: inline-block; font-size: 0.72rem; font-weight: 700; padding: 3px 8px; border-radius: 6px; background: rgba(239, 68, 68, 0.15); border: 1px solid rgba(239, 68, 68, 0.3); color: #f87171; text-transform: uppercase; margin-bottom: 6px; }
     .tag-prob { display: inline-block; padding: 4px 10px; background: rgba(56, 189, 248, 0.15); border: 1px solid rgba(56, 189, 248, 0.4); color: #38bdf8; border-radius: 8px; font-weight: 700; font-size: 0.85rem; }
     .tag-odds { display: inline-block; padding: 4px 10px; background: rgba(245, 158, 11, 0.15); border: 1px solid rgba(245, 158, 11, 0.4); color: #fbbf24; border-radius: 8px; font-weight: 700; font-size: 0.85rem; }
-    .market-badge { display: inline-block; font-size: 0.72rem; font-weight: 700; padding: 3px 8px; border-radius: 6px; background: rgba(239, 68, 68, 0.15); border: 1px solid rgba(239, 68, 68, 0.3); color: #f87171; text-transform: uppercase; margin-bottom: 6px; }
+    
+    .dual-box {
+        background: rgba(0, 0, 0, 0.25);
+        border: 1px solid rgba(255, 255, 255, 0.06);
+        border-radius: 10px;
+        padding: 10px 14px;
+        margin-top: 10px;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+    }
     .brand-title { font-size: 2.2rem; font-weight: 800; background: linear-gradient(135deg, #ffffff 0%, #94a3b8 100%); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
 </style>
 """, unsafe_allow_html=True)
@@ -281,15 +259,11 @@ def run_auto_sync():
     fixtures, err = fetcher.fetch_upcoming_fixtures(today_str, days_ahead=7)
     if err or not fixtures:
         return 0
-    engine = SportyBetValueEngine()
+    engine = StrictDCHandicapEngine()
     standings_cache = {}
-    
-    # Strict Quota System: Maximum 1 Under 4.5 and maximum 2 of any other category across entire board
-    category_quotas = {"Over/Under": 1}
-    category_counts = {}
     count = 0
 
-    for m in fixtures:
+    for idx, m in enumerate(fixtures):
         comp_code = m.get("competition", {}).get("code")
         if not comp_code:
             continue
@@ -305,29 +279,11 @@ def run_auto_sync():
         a_stat = team_stats.get(a_team, {"att_strength": 1.0, "def_strength": 1.0})
         
         h_xg, a_xg = engine.calculate_xg(h_stat["att_strength"], h_stat["def_strength"], a_stat["att_strength"], a_stat["def_strength"])
-        candidates = engine.evaluate_match_markets(h_xg, a_xg, h_team, a_team)
-
-        if not candidates:
-            continue
-
-        # Choose the best market that has NOT exceeded category quota
-        chosen = None
-        for cand in candidates:
-            cat = cand["cat"]
-            limit = category_quotas.get(cat, 2)
-            if category_counts.get(cat, 0) < limit:
-                chosen = cand
-                category_counts[cat] = category_counts.get(cat, 0) + 1
-                break
-
-        if not chosen:
-            # Fallback to the top candidate that is NOT Under 4.5
-            non_under = [c for c in candidates if c["pick"] != "Under 4.5"]
-            chosen = non_under[0] if non_under else candidates[0]
+        res = engine.evaluate(h_xg, a_xg, h_team, a_team, index=count)
 
         save_prediction(
             m_date, str(m["id"]), m["competition"]["name"], 
-            h_team, a_team, chosen["cat"], chosen["pick"], chosen["prob"], chosen["odds"]
+            h_team, a_team, res["cat"], res["pick"], res["prob"], res["odds"], res["extra"]
         )
         count += 1
     return count
@@ -335,13 +291,13 @@ def run_auto_sync():
 records = get_upcoming_predictions(today_str)
 
 if not records and fetcher.API_KEY != "PASTE_YOUR_API_KEY_HERE":
-    with st.spinner("⚡ Rebuilding board with high-value SportyBet markets..."):
+    with st.spinner("⚡ Locking Double Chance & Handicap lines across upcoming matches..."):
         run_auto_sync()
         records = get_upcoming_predictions(today_str)
 
 # ----------------- MAIN INTERFACE -----------------
 st.markdown('<div class="brand-title">Tactical Predictive Suite</div>', unsafe_allow_html=True)
-st.markdown('<div style="color: #94a3b8; margin-bottom: 20px;">Modeled on authentic winning slips: Combos, Handicaps, 1st Half Goals, Team Totals & Double Chance.</div>', unsafe_allow_html=True)
+st.markdown('<div style="color: #94a3b8; margin-bottom: 20px;">Exclusively focused on <b>Double Chance</b>, <b>Handicap Cushions</b>, and <b>Team/Match Over 1.5</b>.</div>', unsafe_allow_html=True)
 
 if records:
     main_tabs = st.tabs([
@@ -355,7 +311,7 @@ if records:
     # TAB 1: ODDS TIER ACCUMULATOR BUILDER
     # =========================================================================
     with main_tabs[0]:
-        st.markdown("<p style='color: #94a3b8; font-size: 0.9rem;'>Select your targeted odds tier. The engine automatically compounds high-conviction legs to match your desired slip.</p>", unsafe_allow_html=True)
+        st.markdown("<p style='color: #94a3b8; font-size: 0.9rem;'>Select your targeted odds tier. Strictly compounded using Double Chance and Handicap cushions.</p>", unsafe_allow_html=True)
         tier = st.radio("Choose Target Odds:", ["3 Odds", "5 Odds", "10 Odds", "20 Odds", "100 Odds"], horizontal=True)
         target_dict = {"3 Odds": 3.0, "5 Odds": 5.0, "10 Odds": 10.0, "20 Odds": 20.0, "100 Odds": 100.0}
         target_val = target_dict[tier]
@@ -425,11 +381,13 @@ if records:
     # TAB 2: SURE BANGER HITS
     # =========================================================================
     with main_tabs[1]:
-        st.markdown("<p style='color: #94a3b8; font-size: 0.9rem;'>Dedicated to individual lock-in selections. Use these for heavy single stakes or conservative rollovers.</p>", unsafe_allow_html=True)
+        st.markdown("<p style='color: #94a3b8; font-size: 0.9rem;'>Dedicated to high-confidence Double Chance and Handicap locks.</p>", unsafe_allow_html=True)
         bangers = records[:6]
         b_cols = st.columns(2)
         for idx, item in enumerate(bangers):
             m_date, m_comp, m_home, m_away, m_cat, m_pick, m_conf, m_odds = item[:8]
+            extra = json.loads(item[9]) if len(item) > 9 and item[9] else {}
+            
             with b_cols[idx % 2]:
                 st.markdown(f"""
                 <div class="glass-card" style="border-left: 4px solid #10b981;">
@@ -455,13 +413,27 @@ if records:
                 """, unsafe_allow_html=True)
 
     # =========================================================================
-    # TAB 3: SURE FIXTURES (DETAILED STAKING SIGNALS)
+    # TAB 3: SURE FIXTURES (SHOWING BOTH DC & HANDICAP TOGETHER)
     # =========================================================================
     with main_tabs[2]:
-        st.markdown("<p style='color: #94a3b8; font-size: 0.9rem;'>Detailed tactical cards specifying exactly what market to stake, backup options, and edge metrics.</p>", unsafe_allow_html=True)
+        st.markdown("<p style='color: #94a3b8; font-size: 0.9rem;'>Every match displaying both <b>Double Chance</b> and <b>Handicap Cushion</b> options.</p>", unsafe_allow_html=True)
         s_cols = st.columns(2)
-        for idx, item in enumerate(records[:8]):
+        for idx, item in enumerate(records[:10]):
             m_date, m_comp, m_home, m_away, m_cat, m_pick, m_conf, m_odds = item[:8]
+            extra = json.loads(item[9]) if len(item) > 9 and item[9] else {}
+            
+            dc_pick = extra.get("dc_pick", "Home or Draw (1X)")
+            dc_odds = extra.get("dc_odds", 1.20)
+            dc_prob = extra.get("dc_prob", 84.0)
+
+            hcap_pick = extra.get("hcap_pick", "Handicap Away (0:3)")
+            hcap_odds = extra.get("hcap_odds", 1.18)
+            hcap_prob = extra.get("hcap_prob", 90.0)
+
+            o15_pick = extra.get("team_o15_pick", "Match Total: Over 1.5")
+            o15_odds = extra.get("team_o15_odds", 1.30)
+            o15_prob = extra.get("team_o15_prob", 78.0)
+
             with s_cols[idx % 2]:
                 st.markdown(f"""
                 <div class="glass-card">
@@ -469,18 +441,43 @@ if records:
                         <span style="font-size: 0.75rem; color: #94a3b8;">🏆 {m_comp}</span>
                         <span style="font-size: 0.75rem; color: #64748b;">🗓️ {m_date}</span>
                     </div>
-                    <div style="font-size: 1.15rem; font-weight: 800; color: #fff; margin-bottom: 10px;">
+                    <div style="font-size: 1.15rem; font-weight: 800; color: #fff; margin-bottom: 12px;">
                         {m_home} <span style="color: #64748b; font-weight: 400; font-size: 0.95rem;">vs</span> {m_away}
                     </div>
-                    <span class="market-badge">{m_cat}</span>
-                    <div style="display: flex; justify-content: space-between; align-items: center; border-top: 1px solid rgba(255,255,255,0.06); padding-top: 10px; margin-top: 8px;">
+
+                    <!-- Option 1: Double Chance -->
+                    <div class="dual-box">
                         <div>
-                            <span style="font-size: 0.68rem; color: #94a3b8; display: block;">RECOMMENDED BET</span>
-                            <span style="color: #38bdf8; font-weight: 800; font-size: 1.1rem;">{m_pick}</span>
+                            <span style="font-size: 0.65rem; color: #38bdf8; font-weight: 700; display: block;">🛡️ DOUBLE CHANCE</span>
+                            <span style="font-weight: 800; color: #fff; font-size: 0.95rem;">{dc_pick}</span>
                         </div>
-                        <div style="display: flex; gap: 8px;">
-                            <span class="tag-prob">{m_conf * 100:.1f}%</span>
-                            <span class="tag-odds">@{m_odds:.2f}</span>
+                        <div style="text-align: right;">
+                            <span style="color: #fbbf24; font-weight: 800; font-size: 1rem;">@{dc_odds:.2f}</span>
+                            <span style="color: #94a3b8; font-size: 0.72rem; display: block;">{dc_prob}%</span>
+                        </div>
+                    </div>
+
+                    <!-- Option 2: Handicap -->
+                    <div class="dual-box">
+                        <div>
+                            <span style="font-size: 0.65rem; color: #34d399; font-weight: 700; display: block;">🎯 HANDICAP CUSHION</span>
+                            <span style="font-weight: 800; color: #fff; font-size: 0.95rem;">{hcap_pick}</span>
+                        </div>
+                        <div style="text-align: right;">
+                            <span style="color: #fbbf24; font-weight: 800; font-size: 1rem;">@{hcap_odds:.2f}</span>
+                            <span style="color: #94a3b8; font-size: 0.72rem; display: block;">{hcap_prob}%</span>
+                        </div>
+                    </div>
+
+                    <!-- Option 3: Over 1.5 Goals -->
+                    <div class="dual-box">
+                        <div>
+                            <span style="font-size: 0.65rem; color: #f87171; font-weight: 700; display: block;">⚽ OVER 1.5 GOALS</span>
+                            <span style="font-weight: 800; color: #fff; font-size: 0.95rem;">{o15_pick}</span>
+                        </div>
+                        <div style="text-align: right;">
+                            <span style="color: #fbbf24; font-weight: 800; font-size: 1rem;">@{o15_odds:.2f}</span>
+                            <span style="color: #94a3b8; font-size: 0.72rem; display: block;">{o15_prob}%</span>
                         </div>
                     </div>
                 </div>
@@ -519,4 +516,4 @@ if records:
                 """, unsafe_allow_html=True)
 
 else:
-    st.info("⚡ Analyzing matches and constructing real multi-market packages...")
+    st.info("⚡ Analyzing matches for Double Chance, Handicap, and Over 1.5 lines...")
