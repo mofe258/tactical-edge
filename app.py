@@ -1,12 +1,12 @@
 """
 app.py — TacticalEdge Platform
-Institutional Football Intelligence Dashboard with strict single-day locking.
-Matches from different days never mix on accumulator tickets.
+Institutional Football Intelligence Dashboard with real-time live match detection,
+kick-off clock tracking, evidence quality scores, and single-day locking.
 """
 
 import streamlit as st
 import pandas as pd
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 import json
 
 import db
@@ -37,7 +37,6 @@ st.markdown("""
         color: #E2E8F0;
     }
 
-    /* Top Bar */
     .top-bar {
         display: flex;
         align-items: center;
@@ -81,14 +80,19 @@ st.markdown("""
         background-color: #10B981;
         box-shadow: 0 0 8px #10B981;
     }
-    .status-dot-amber {
+    .status-dot-red {
         width: 8px;
         height: 8px;
         border-radius: 50%;
-        background-color: #F59E0B;
+        background-color: #EF4444;
+        box-shadow: 0 0 8px #EF4444;
+        animation: pulseLive 1.5s infinite;
+    }
+    @keyframes pulseLive {
+        0%, 100% { opacity: 1; transform: scale(1); }
+        50% { opacity: 0.4; transform: scale(1.15); }
     }
 
-    /* KPI Summary Cards */
     .kpi-card {
         background: #101626;
         border: 1px solid #1A2234;
@@ -116,7 +120,6 @@ st.markdown("""
         margin-top: 4px;
     }
 
-    /* Match Fixture Cards */
     .match-card {
         background: #101626;
         border: 1px solid #1A2234;
@@ -133,10 +136,10 @@ st.markdown("""
         border: 1px solid #10B981 !important;
     }
     .match-card-live {
-        border: 1px solid #DC2626 !important;
+        border: 1px solid #EF4444 !important;
+        box-shadow: 0 0 15px rgba(239, 68, 68, 0.2) !important;
     }
 
-    /* Team Lineup Header */
     .team-row {
         display: flex;
         align-items: center;
@@ -154,7 +157,6 @@ st.markdown("""
         color: #FFFFFF;
     }
 
-    /* Badges */
     .badge-status {
         font-size: 0.72rem;
         font-weight: 700;
@@ -166,9 +168,10 @@ st.markdown("""
         color: #94A3B8;
     }
     .badge-live {
-        background: rgba(239, 68, 68, 0.15);
-        color: #EF4444;
-        border: 1px solid rgba(239, 68, 68, 0.3);
+        background: rgba(239, 68, 68, 0.2);
+        color: #F87171;
+        border: 1px solid #EF4444;
+        animation: pulseLive 1.5s infinite;
     }
     .badge-boom {
         background: rgba(16, 185, 129, 0.15);
@@ -185,7 +188,6 @@ st.markdown("""
         border: 1px solid #232D42;
     }
 
-    /* Model Selection Box */
     .pick-box {
         background: #0C1220;
         border: 1px solid #1A2234;
@@ -220,7 +222,6 @@ st.markdown("""
         font-weight: 700;
     }
 
-    /* Navigation Tabs */
     .stTabs [data-baseweb="tab-list"] {
         gap: 6px;
         border-bottom: 1px solid #1A2234;
@@ -240,26 +241,42 @@ st.markdown("""
     }
 
     @media (max-width: 768px) {
-        .top-bar {
-            flex-direction: column;
-            align-items: flex-start;
-        }
-        .match-card {
-            padding: 14px;
-        }
-        .team-name {
-            font-size: 0.95rem;
-        }
+        .top-bar { flex-direction: column; align-items: flex-start; }
+        .match-card { padding: 14px; }
+        .team-name { font-size: 0.95rem; }
     }
 </style>
 """, unsafe_allow_html=True)
 
-# ----------------- DATE SELECTION (DEFAULTS STRICTLY TO TODAY) -----------------
 today_str = date.today().strftime("%Y-%m-%d")
 
 
+# ----------------- REAL-TIME LIVE MATCH DETECTOR -----------------
+def is_match_currently_live(m):
+    """
+    Detects if a match is actively live via API status OR real-time kickoff clock.
+    """
+    status = m.get("match_status", "SCHEDULED")
+    if status in ['IN_PLAY', 'PAUSED', 'LIVE']:
+        return True
+
+    # Real-time clock check: if kickoff has passed and match isn't finished
+    if status not in ['FINISHED', 'FT', 'CANCELLED', 'POSTPONED']:
+        m_date = m.get("match_date", "")
+        k_time = m.get("kickoff_time", "")
+        if m_date and len(k_time) >= 5:
+            try:
+                ko_dt = datetime.strptime(f"{m_date} {k_time[:5]}", "%Y-%m-%d %H:%M")
+                diff_minutes = (datetime.utcnow() - ko_dt).total_seconds() / 60.0
+                if 0 <= diff_minutes <= 115:
+                    return True
+            except Exception:
+                pass
+    return False
+
+
+# ----------------- SYNCHRONIZATION PIPELINE -----------------
 def sync_pipeline():
-    # Sync from today forward across 7 days so database stays ahead
     fixtures, err = fetcher.fetch_upcoming_fixtures(today_str, days_ahead=7)
     if err or not fixtures:
         return 0, err
@@ -372,11 +389,14 @@ def sync_pipeline():
     return count, None
 
 
-# Check today's matches
+# Auto-refresh scores and statuses on launch
 existing_today = db.get_predictions_filtered(exact_date=today_str)
-if not existing_today and fetcher.get_api_key():
-    with st.spinner("Connecting API feed and calculating today's calibrated models..."):
+if fetcher.get_api_key():
+    last_sync_check = db.get_setting("last_sync_timestamp", "0")
+    now_ts = datetime.utcnow().timestamp()
+    if not existing_today or (now_ts - float(last_sync_check) > 120):
         sync_pipeline()
+        db.set_setting("last_sync_timestamp", str(now_ts))
         existing_today = db.get_predictions_filtered(exact_date=today_str)
 
 # ----------------- SIDEBAR -----------------
@@ -395,18 +415,17 @@ with st.sidebar:
     last_sync = db.get_setting("last_successful_sync", "Never")
     st.caption(f"• Last Success: {last_sync}")
 
-    if st.button("Sync Match Schedule & Scores", use_container_width=True):
+    if st.button("Sync Match Schedule & Live Scores", use_container_width=True):
         count, err = sync_pipeline()
         if err:
             st.error(err)
         else:
-            st.success(f"Synced {count} fixtures.")
+            st.success(f"Updated {count} fixtures.")
             st.rerun()
 
 # ----------------- TOP NAVBAR & DATE LOCK -----------------
 sync_status = db.get_setting("sync_status", "Awaiting Initial Sync")
 last_sync_time = db.get_setting("last_successful_sync", "Never")
-dot_class = "status-dot-green" if "Live" in sync_status or "Updated" in sync_status else "status-dot-amber"
 
 st.markdown(f"""
 <div class="top-bar">
@@ -415,14 +434,13 @@ st.markdown(f"""
         <div class="brand-subtitle">Football Intelligence & Calibrated Prediction Platform</div>
     </div>
     <div class="freshness-pill">
-        <div class="{dot_class}"></div>
+        <div class="status-dot-green"></div>
         <span>{sync_status} &nbsp;•&nbsp; {last_sync_time}</span>
     </div>
 </div>
 """, unsafe_allow_html=True)
 
-# ----------------- STRICT DAILY DATE FILTER -----------------
-# Defaults strictly to TODAY. As soon as 12am hits, date.today() automatically advances to the new day.
+# Date Picker (Defaults strictly to TODAY)
 d_col1, d_col2 = st.columns([1.5, 3.5])
 with d_col1:
     selected_date_obj = st.date_input("🗓️ Active Betting Date", value=date.today())
@@ -430,11 +448,10 @@ with d_col1:
 
 with d_col2:
     if active_date_str == today_str:
-        st.caption(f"🟢 **Showing Today's Fixtures Only ({active_date_str})**. Tickets will strictly use matches playing today.")
+        st.caption(f"🟢 **Showing Today's Fixtures Only ({active_date_str})**. Slips strictly use matches playing today.")
     else:
-        st.caption(f"Viewing archived or scheduled fixtures for **{active_date_str}**.")
+        st.caption(f"Viewing fixtures for **{active_date_str}**.")
 
-# Pull strictly for this single day
 daily_matches = db.get_predictions_filtered(exact_date=active_date_str)
 
 # 4 Performance Metric Cards
@@ -495,7 +512,7 @@ main_tabs = st.tabs([
 
 
 def render_fixture_card(m, key_prefix):
-    is_live = m["match_status"] in ['IN_PLAY', 'PAUSED']
+    is_live = is_match_currently_live(m)
     is_boom = m["boom_status"] == 'BOOM'
     cls = "match-card"
     if is_boom:
@@ -503,9 +520,11 @@ def render_fixture_card(m, key_prefix):
     elif is_live:
         cls += " match-card-live"
 
+    live_score_display = m["live_score"] if m["live_score"] != "vs" else "0 - 0"
+
     badge_html = (
         '<span class="badge-status badge-boom">SETTLED WON</span>' if is_boom else (
-            f'<span class="badge-status badge-live">LIVE &nbsp; {m["live_score"]}</span>' if is_live else (
+            f'<span class="badge-status badge-live">🔴 LIVE &nbsp; {live_score_display}</span>' if is_live else (
                 f'<span class="badge-status badge-scheduled">FT: {m["live_score"]}</span>' if m["match_status"] in ['FINISHED', 'FT'] else
                 f'<span class="badge-status badge-scheduled">{m.get("kickoff_time", "TBD")}</span>'
             )
@@ -524,7 +543,7 @@ def render_fixture_card(m, key_prefix):
         <div class="team-row">
             {h_crest_html}
             <span class="team-name">{m['home_team']}</span>
-            <span style="color: #64748B; font-weight: 400; font-size: 0.85rem; margin: 0 4px;">vs</span>
+            <span style="color: #64748B; font-weight: 400; font-size: 0.85rem; margin: 0 4px;">{m['live_score'] if is_live else 'vs'}</span>
             {a_crest_html}
             <span class="team-name">{m['away_team']}</span>
         </div>
@@ -577,7 +596,7 @@ def render_fixture_card(m, key_prefix):
 
 
 # =============================================================================
-# TAB 1: DAILY INTELLIGENCE (STRICTLY FOR ACTIVE DAY)
+# TAB 1: DAILY INTELLIGENCE
 # =============================================================================
 with main_tabs[0]:
     f1, f2, f3, f4 = st.columns([2, 1.5, 1.5, 1.5])
@@ -610,7 +629,7 @@ with main_tabs[0]:
         st.info(f"No fixtures scheduled for {active_date_str}. If today is an off-day, check the date picker above for the upcoming match day.")
 
 # =============================================================================
-# TAB 2: ELITE MATCHES (STRICTLY FOR ACTIVE DAY)
+# TAB 2: ELITE MATCHES
 # =============================================================================
 with main_tabs[1]:
     st.caption(f"Curated powerhouse and Premier League fixtures playing on **{active_date_str}**.")
@@ -634,10 +653,10 @@ with main_tabs[1]:
         st.info(f"No marquee powerhouse fixtures playing on {active_date_str}.")
 
 # =============================================================================
-# TAB 3: ACCUMULATOR ANALYSIS (STRICTLY SINGLE-DAY SLIPS)
+# TAB 3: ACCUMULATOR ANALYSIS
 # =============================================================================
 with main_tabs[2]:
-    st.caption(f"Multi-bet compounder strictly stacking matches playing on **{active_date_str}**. Different days are never mixed.")
+    st.caption(f"Multi-bet compounder strictly stacking matches playing on **{active_date_str}**.")
 
     tier = st.radio("Target Compound Tier:", ["3.00x Odds", "5.00x Odds", "10.00x Odds", "15.00x Boom Slip", "50.00x Multi"], horizontal=True)
     t_val = {"3.00x Odds": 3.0, "5.00x Odds": 5.0, "10.00x Odds": 10.0, "15.00x Boom Slip": 14.5, "50.00x Multi": 50.0}[tier]
@@ -645,7 +664,6 @@ with main_tabs[2]:
     legs = []
     accum_odds = 1.0
 
-    # Only compound matches playing ON THE ACTIVE DAY
     for r in daily_matches:
         accum_odds *= float(r["est_odds"])
         legs.append(r)
