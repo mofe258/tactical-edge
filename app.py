@@ -5,20 +5,28 @@ import db
 from engine import FootballEngine
 import fetcher
 
+# Page Configuration
 st.set_page_config(page_title="Tactical Edge Predictor", layout="wide", page_icon="⚽")
+
+# Ensure database is initialized with current schema
 db.init_db()
 
 st.title("⚽ Tactical Edge - Daily Mathematical Predictions")
 st.markdown("Automated algorithmic selections locked before kickoff.")
 
-# Sidebar Settings
+# Sidebar Configuration
 with st.sidebar:
     st.header("⚙️ Configuration")
     
-    # Allows API Key from Streamlit Secrets OR manual input
-    api_key_default = st.secrets.get("FOOTBALL_API_KEY", "") if hasattr(st, "secrets") else ""
+    # Read from Streamlit Secrets if available, otherwise allow manual input
+    api_key_default = ""
+    try:
+        if hasattr(st, "secrets") and "FOOTBALL_API_KEY" in st.secrets:
+            api_key_default = st.secrets["FOOTBALL_API_KEY"]
+    except Exception:
+        pass
+
     api_key = st.text_input("football-data.org API Key", value=api_key_default, type="password")
-    
     min_confidence = st.slider("Min Probability Filter (%)", min_value=60, max_value=85, value=70, step=1) / 100.0
     
     st.divider()
@@ -28,13 +36,14 @@ with st.sidebar:
         if not api_key:
             st.error("Please enter your API Key!")
         else:
-          with st.spinner("Fetching matches and analyzing stats..."):
-            fixtures, err_msg = fetcher.fetch_daily_fixtures(api_key, selected_date)
-            if err_msg:
-                st.error(err_msg)
-            elif not fixtures:
-                st.warning(f"No free-tier matches scheduled for {selected_date}. Try selecting the upcoming weekend!")
-            else:
+            with st.spinner("Fetching matches and analyzing stats..."):
+                fixtures, err_msg = fetcher.fetch_daily_fixtures(api_key, selected_date)
+                
+                if err_msg:
+                    st.error(err_msg)
+                elif not fixtures:
+                    st.warning(f"No free-tier matches scheduled for {selected_date}. Try selecting an upcoming match day (e.g. this Saturday)!")
+                else:
                     engine = FootballEngine()
                     standings_cache = {}
                     count = 0
@@ -44,6 +53,7 @@ with st.sidebar:
                         if not comp_code:
                             continue
                         
+                        # Cache standings per competition to prevent hitting rate limits
                         if comp_code not in standings_cache:
                             standings_cache[comp_code] = fetcher.fetch_standings(api_key, comp_code)
                             
@@ -60,7 +70,7 @@ with st.sidebar:
                         )
                         probs = engine.predict_match(h_xg, a_xg)
                         
-                        # Find the safest bet above the confidence threshold
+                        # Pick the highest probability outcome
                         safest_market = max(probs, key=probs.get)
                         safest_prob = probs[safest_market]
 
@@ -76,15 +86,19 @@ with st.sidebar:
                             )
                             count += 1
                     
-                    st.success(f"Analysis complete! Locked {count} high-confidence picks.")
-                    st.rerun()
+                    if count > 0:
+                        st.success(f"Analysis complete! Locked {count} high-confidence picks.")
+                        st.rerun()
+                    else:
+                        st.info("Matches found, but none met your minimum confidence threshold. Try lowering the filter.")
 
-# Display Area
+# Display Area (Read-Only from SQLite)
 raw_data = db.get_predictions(selected_date)
 
 if raw_data:
     df = pd.DataFrame(raw_data, columns=["Competition", "Home Team", "Away Team", "Safest Pick", "Model Probability", "Locked At"])
     df["Model Probability"] = df["Model Probability"].apply(lambda p: f"{p * 100:.1f}%")
+    st.subheader(f"Locked Selections for {selected_date}")
     st.dataframe(df, use_container_width=True)
 else:
-    st.info(f"No predictions locked for {selected_date}. Enter your API key on the left and click **'Fetch & Lock Predictions'**.")
+    st.info(f"No predictions locked for {selected_date}. Enter your API key on the left, choose a match day, and click **'Fetch & Lock Predictions'**.")
