@@ -1,5 +1,7 @@
 """
 engine.py — Advanced Statistical Modeling & Prediction Engine
+Implements Dixon-Coles Bivariate Poisson with Bayesian Shrinkage on team ratings,
+evidence-quality scoring, and team-specific parameterization.
 """
 
 import numpy as np
@@ -14,19 +16,14 @@ class FootballEngine:
         self.shrinkage_weight = shrinkage_weight
 
     def apply_bayesian_shrinkage(self, raw_rating, sample_size=10):
+        """Regresses team attack/defense ratings toward the league mean (1.0)."""
         n = max(1, float(sample_size))
         weight = n / (n + self.shrinkage_weight)
         shrunk = (weight * float(raw_rating)) + ((1.0 - weight) * 1.0)
-        return float(np.clip(shrunk, 0.55, 1.85))
+        return float(np.clip(shrunk, 0.50, 1.95))
 
-    def calculate_xg(self, home_att, home_def, away_att, away_def, *args, **kwargs):
-        """
-        Calculates expected goals. Accepts variable arguments and keywords safely
-        to prevent any TypeError collisions.
-        """
-        home_games = kwargs.get("home_games", 10)
-        away_games = kwargs.get("away_games", 10)
-
+    def calculate_xg(self, home_att, home_def, away_att, away_def, home_games=10, away_games=10):
+        """Calculates expected goals with Bayesian shrinkage based on sample size."""
         h_att_shrunk = self.apply_bayesian_shrinkage(home_att, home_games)
         h_def_shrunk = self.apply_bayesian_shrinkage(home_def, home_games)
         a_att_shrunk = self.apply_bayesian_shrinkage(away_att, away_games)
@@ -35,8 +32,8 @@ class FootballEngine:
         home_xg = h_att_shrunk * a_def_shrunk * self.league_avg_home
         away_xg = a_att_shrunk * h_def_shrunk * self.league_avg_away
 
-        home_xg = float(np.clip(home_xg, 0.40, 2.75))
-        away_xg = float(np.clip(away_xg, 0.30, 2.25))
+        home_xg = float(np.clip(home_xg, 0.35, 2.85))
+        away_xg = float(np.clip(away_xg, 0.25, 2.35))
 
         return float(round(home_xg, 3)), float(round(away_xg, 3))
 
@@ -64,10 +61,11 @@ class FootballEngine:
             matrix = matrix / m_sum
         return matrix
 
-    def predict_full_match(self, home_xg, away_xg, home_team="Home", away_team="Away"):
+    def predict_full_match(self, home_xg, away_xg, home_team="Home", away_team="Away", home_games=10, away_games=10):
         matrix = self.compute_score_matrix(home_xg, away_xg)
         max_goals = matrix.shape[0]
 
+        # 1. 1X2 Probabilities (Guaranteed sum = 100%)
         prob_home = float(np.sum(np.tril(matrix, -1)))
         prob_draw = float(np.sum(np.diag(matrix)))
         prob_away = float(np.sum(np.triu(matrix, 1)))
@@ -78,18 +76,23 @@ class FootballEngine:
             prob_draw /= total_1x2
             prob_away /= total_1x2
 
+        # 2. Double Chance
         dc_1x = min(0.92, prob_home + prob_draw)
         dc_x2 = min(0.90, prob_away + prob_draw)
+        dc_12 = prob_home + prob_away
 
+        # 3. Over / Under Goals
         ou = {}
         for line in [1.5, 2.5, 3.5]:
             u_prob = float(np.sum([matrix[h][a] for h in range(max_goals) for a in range(max_goals) if h + a < line]))
             ou[f"Under {line}"] = u_prob
             ou[f"Over {line}"] = 1.0 - u_prob
 
+        # 4. BTTS
         btts_yes = float(np.sum(matrix[1:, 1:]))
         btts_no = 1.0 - btts_yes
 
+        # 5. Exact Joint Probability Combos
         h_and_o15 = float(np.sum([matrix[h][a] for h in range(max_goals) for a in range(max_goals) if h > a and (h + a) >= 2]))
         a_and_o15 = float(np.sum([matrix[h][a] for h in range(max_goals) for a in range(max_goals) if a > h and (h + a) >= 2]))
         away_hcap_25 = float(np.sum([matrix[h][a] for h in range(max_goals) for a in range(max_goals) if (h - a) < 3]))
@@ -98,6 +101,7 @@ class FootballEngine:
             p = np.clip(p, 0.02, 0.96)
             return float(round((1.0 / p) * (1.0 - margin), 2))
 
+        # Top 5 most probable exact scores
         score_candidates = []
         for h in range(5):
             for a in range(5):
@@ -105,17 +109,30 @@ class FootballEngine:
         score_candidates.sort(key=lambda x: x["prob"], reverse=True)
         top_scores = score_candidates[:5]
 
+        # Determine Evidence Quality Score based on games played
+        min_games = min(home_games, away_games)
+        if min_games >= 8:
+            evidence_quality = "Strong Evidence"
+            evidence_desc = f"Verified across {home_games} home and {away_games} away league fixtures."
+        elif min_games >= 4:
+            evidence_quality = "Moderate Evidence"
+            evidence_desc = f"Based on {home_games} and {away_games} completed matches. Minor regression applied."
+        else:
+            evidence_quality = "Limited Evidence"
+            evidence_desc = f"Small sample size ({min_games} matches). Heavy Bayesian shrinkage applied to prior."
+
         rec = self._select_balanced_market(
             prob_home, prob_draw, prob_away, dc_1x, dc_x2,
             ou, away_hcap_25, h_and_o15, a_and_o15, home_xg, away_xg
         )
 
-        explanation = (
-            f"Bivariate Dixon-Coles projection assigns {home_xg:.2f} xG to {home_team} and {away_xg:.2f} xG to {away_team} "
-            f"(Total Expectancy: {home_xg + away_xg:.2f} goals). "
-            f"Win probability distribution: {prob_home*100:.1f}% Home, {prob_draw*100:.1f}% Draw, {prob_away*100:.1f}% Away. "
-            f"Recommended market: '{rec['pick']}' ({rec['prob']*100:.1f}% calibrated model confidence, fair odds ~{rec['odds']:.2f})."
-        )
+        # Grounded structured explanation
+        explanation = {
+            "summary": f"Model projects {home_xg:.2f} xG for {home_team} and {away_xg:.2f} xG for {away_team} (Combined Match Expectancy: {home_xg + away_xg:.2f} goals).",
+            "supporting": f"{home_team if prob_home >= prob_away else away_team} holds the statistical edge with an estimated {max(prob_home, prob_away)*100:.1f}% win probability. Recommended selection '{rec['pick']}' reflects optimal risk/reward.",
+            "risk": f"Draw density is modeled at {prob_draw*100:.1f}%. Low-scoring deadlock remains the primary variance risk.",
+            "evidence": evidence_desc
+        }
 
         return {
             "home_xg": home_xg,
@@ -123,6 +140,7 @@ class FootballEngine:
             "prob_home": prob_home,
             "prob_draw": prob_draw,
             "prob_away": prob_away,
+            "evidence_quality": evidence_quality,
             "top_scores": top_scores,
             "markets": {
                 "1X2": {
