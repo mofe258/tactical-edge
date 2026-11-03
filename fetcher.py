@@ -1,0 +1,41 @@
+import requests
+from datetime import datetime
+
+BASE_URL = "https://api.football-data.org/v4"
+
+def fetch_daily_fixtures(api_key, match_date):
+    """Fetches matches for the selected date."""
+    headers = {"X-Auth-Token": api_key}
+    url = f"{BASE_URL}/matches?dateFrom={match_date}&dateTo={match_date}"
+    try:
+        res = requests.get(url, headers=headers, timeout=10)
+        if res.status_code == 200:
+            return res.json().get("matches", [])
+        return []
+    except Exception as e:
+        print(f"Error fetching fixtures: {e}")
+        return []
+
+def fetch_standings(api_key, competition_code):
+    """Fetches team stats (goals scored, conceded, form) in one request."""
+    headers = {"X-Auth-Token": api_key}
+    url = f"{BASE_URL}/competitions/{competition_code}/standings"
+    try:
+        res = requests.get(url, headers=headers, timeout=10)
+        if res.status_code == 200:
+            standings_data = res.json()
+            team_stats = {}
+            for table_group in standings_data.get("standings", []):
+                if table_group.get("type") == "TOTAL":
+                    for row in table_group.get("table", []):
+                        team_name = row["team"]["name"]
+                        played = max(1, row.get("playedGames", 1))
+                        team_stats[team_name] = {
+                            "att_strength": (row.get("goalsFor", 0) / played) / 1.35,
+                            "def_strength": (row.get("goalsAgainst", 0) / played) / 1.35,
+                            "form": row.get("form", "N/A")
+                        }
+            return team_stats
+        return {}
+    except Exception:
+        return {}
