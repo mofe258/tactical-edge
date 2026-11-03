@@ -45,7 +45,6 @@ def get_upcoming_predictions(start_date):
         conn.close()
         return rows
     except sqlite3.OperationalError:
-        # Auto-heal: If an old database schema exists, reset it cleanly
         c.execute("DROP TABLE IF EXISTS predictions")
         conn.commit()
         conn.close()
