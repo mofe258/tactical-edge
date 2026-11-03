@@ -6,6 +6,7 @@ DB_NAME = "predictions.db"
 def init_db():
     conn = sqlite3.connect(DB_NAME)
     c = conn.cursor()
+    # Predictions Table
     c.execute('''CREATE TABLE IF NOT EXISTS predictions (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     match_date TEXT,
@@ -17,12 +18,17 @@ def init_db():
                     confidence REAL,
                     locked_at TEXT
                 )''')
-    # Auto-repair: add any missing columns if an old database exists
+    # Settings Table (Remembers API Key & Preferences)
+    c.execute('''CREATE TABLE IF NOT EXISTS settings (
+                    key TEXT PRIMARY KEY,
+                    val TEXT
+                )''')
+    # Auto-repair missing columns
     for col, col_type in [("competition", "TEXT"), ("confidence", "REAL"), ("market", "TEXT")]:
         try:
             c.execute(f"ALTER TABLE predictions ADD COLUMN {col} {col_type}")
         except sqlite3.OperationalError:
-            pass  # Column already exists
+            pass
     conn.commit()
     conn.close()
 
@@ -38,10 +44,28 @@ def save_prediction(match_date, match_id, comp, home, away, market, confidence):
     finally:
         conn.close()
 
-def get_predictions(match_date):
+def get_upcoming_predictions(start_date):
     conn = sqlite3.connect(DB_NAME)
     c = conn.cursor()
-    c.execute("SELECT competition, home_team, away_team, market, confidence, locked_at FROM predictions WHERE match_date = ?", (match_date,))
+    c.execute("""SELECT match_date, competition, home_team, away_team, market, confidence, locked_at 
+                 FROM predictions 
+                 WHERE match_date >= ? 
+                 ORDER BY match_date ASC, confidence DESC""", (start_date,))
     rows = c.fetchall()
     conn.close()
     return rows
+
+def set_setting(key, val):
+    conn = sqlite3.connect(DB_NAME)
+    c = conn.cursor()
+    c.execute("INSERT OR REPLACE INTO settings (key, val) VALUES (?, ?)", (key, str(val)))
+    conn.commit()
+    conn.close()
+
+def get_setting(key, default=""):
+    conn = sqlite3.connect(DB_NAME)
+    c = conn.cursor()
+    c.execute("SELECT val FROM settings WHERE key = ?", (key,))
+    row = c.fetchone()
+    conn.close()
+    return row[0] if row else defaultq
