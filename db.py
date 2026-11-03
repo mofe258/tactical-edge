@@ -1,6 +1,6 @@
 """
-db.py — Persistence Layer & Settlement Engine
-Handles SQLite transactions, team crest persistence, accurate metric reporting,
+db.py — Persistence Layer & Performance Verification
+Handles SQLite transactions with WAL mode, kickoff times, crest persistence,
 and N/A handling for zero-observation states.
 """
 
@@ -46,17 +46,18 @@ def init_db():
     try:
         cursor.execute("PRAGMA journal_mode=WAL;")
         cursor.execute("PRAGMA busy_timeout=30000;")
-        
+
         cursor.execute("PRAGMA table_info(predictions)")
         existing_cols = {row[1] for row in cursor.fetchall()}
 
-        if existing_cols and ("home_crest" not in existing_cols or "match_status" not in existing_cols):
+        if existing_cols and ("kickoff_time" not in existing_cols or "evidence_quality" not in existing_cols):
             cursor.execute("DROP TABLE IF EXISTS predictions")
 
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS predictions (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 match_date TEXT NOT NULL,
+                kickoff_time TEXT DEFAULT 'TBD',
                 match_id TEXT UNIQUE NOT NULL,
                 competition TEXT NOT NULL,
                 home_team TEXT NOT NULL,
@@ -69,6 +70,7 @@ def init_db():
                 est_odds REAL NOT NULL,
                 locked_at TEXT NOT NULL,
                 tactical_tag TEXT,
+                evidence_quality TEXT DEFAULT 'Moderate Evidence',
                 match_status TEXT DEFAULT 'SCHEDULED',
                 live_score TEXT DEFAULT 'vs',
                 boom_status TEXT DEFAULT 'PENDING',
@@ -128,14 +130,15 @@ def save_or_update_prediction(match_data):
         else:
             cursor.execute("""
                 INSERT INTO predictions (
-                    match_date, match_id, competition, home_team, away_team,
+                    match_date, kickoff_time, match_id, competition, home_team, away_team,
                     home_crest, away_crest, market_category, market_pick,
-                    confidence, est_odds, locked_at, tactical_tag,
+                    confidence, est_odds, locked_at, tactical_tag, evidence_quality,
                     match_status, live_score, boom_status, full_time_home,
                     full_time_away, prob_home, prob_draw, prob_away, details_json
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (
                 match_data["match_date"],
+                match_data.get("kickoff_time", "TBD"),
                 match_data["match_id"],
                 match_data["competition"],
                 match_data["home_team"],
@@ -148,6 +151,7 @@ def save_or_update_prediction(match_data):
                 match_data["est_odds"],
                 datetime.utcnow().strftime("%H:%M UTC"),
                 match_data.get("tactical_tag", "Model Edge"),
+                match_data.get("evidence_quality", "Moderate Evidence"),
                 match_data.get("match_status", "SCHEDULED"),
                 match_data.get("live_score", "vs"),
                 match_data.get("boom_status", "PENDING"),
@@ -183,6 +187,8 @@ def get_predictions_filtered(min_date=None, competition=None, status=None, marke
             query += " AND match_status IN ('FINISHED', 'FT')"
         elif status == "Upcoming":
             query += " AND match_status IN ('SCHEDULED', 'TIMED')"
+        elif status == "Postponed":
+            query += " AND match_status IN ('POSTPONED', 'SUSPENDED', 'CANCELLED')"
 
     if market_cat and market_cat != "All Markets":
         query += " AND market_category = ?"
@@ -193,15 +199,11 @@ def get_predictions_filtered(min_date=None, competition=None, status=None, marke
         term = f"%{search_query.strip()}%"
         params.extend([term, term, term])
 
-    query += " ORDER BY match_date ASC, (confidence * est_odds) DESC"
+    query += " ORDER BY match_date ASC, kickoff_time ASC, (confidence * est_odds) DESC"
     return execute_db(query, params, fetchall=True) or []
 
 
 def get_performance_metrics():
-    """
-    Returns actual empirical backtesting metrics.
-    When 0 matches have settled, explicitly returns N/A to avoid misleading 0.000 Brier scores.
-    """
     query = """
         SELECT * FROM predictions
         WHERE match_status IN ('FINISHED', 'FT')
@@ -215,105 +217,3 @@ def get_performance_metrics():
             "total_settled": 0,
             "won": 0,
             "lost": 0,
-            "win_rate_str": "N/A",
-            "brier_score_str": "N/A",
-            "roi_str": "N/A",
-            "status_note": "Awaiting match conclusions (N=0 settled). Historical metrics generate automatically after full-time.",
-            "market_breakdown": {},
-            "league_breakdown": {},
-            "calibration_samples": []
-        }
-
-    total = len(settled)
-    won = sum(1 for r in settled if r["boom_status"] == "BOOM")
-    lost = total - won
-    win_rate = round((won / total) * 100.0, 1)
-
-    market_stats = {}
-    league_stats = {}
-    p_dists = []
-    actuals = []
-    total_returns = 0.0
-
-    for r in settled:
-        cat = r["market_category"]
-        league = r["competition"]
-        is_win = 1 if r["boom_status"] == "BOOM" else 0
-
-        if is_win:
-            total_returns += float(r["est_odds"])
-
-        if cat not in market_stats:
-            market_stats[cat] = {"total": 0, "won": 0}
-        market_stats[cat]["total"] += 1
-        market_stats[cat]["won"] += is_win
-
-        if league not in league_stats:
-            league_stats[league] = {"total": 0, "won": 0}
-        league_stats[league]["total"] += 1
-        league_stats[league]["won"] += is_win
-
-        h_g = r.get("full_time_home")
-        a_g = r.get("full_time_away")
-        if h_g is not None and a_g is not None:
-            actual = 0 if h_g > a_g else (1 if h_g == a_g else 2)
-            p_dist = [
-                float(r.get("prob_home") or 0.33),
-                float(r.get("prob_draw") or 0.33),
-                float(r.get("prob_away") or 0.34)
-            ]
-            p_dists.append(p_dist)
-            actuals.append(actual)
-
-    brier = 0.0
-    if len(p_dists):
-        try:
-            from engine import FootballEngine
-            brier = FootballEngine.calculate_brier_score(p_dists, actuals)
-        except Exception:
-            pass
-
-    total_staked = float(total)
-    net_profit = total_returns - total_staked
-    roi_pct = round((net_profit / total_staked) * 100.0, 1) if total_staked > 0 else 0.0
-
-    for k in market_stats:
-        t = market_stats[k]["total"]
-        w = market_stats[k]["won"]
-        market_stats[k]["accuracy"] = round((w / t) * 100.0, 1)
-
-    for k in league_stats:
-        t = league_stats[k]["total"]
-        w = league_stats[k]["won"]
-        league_stats[k]["accuracy"] = round((w / t) * 100.0, 1)
-
-    conf_samples = [float(r["confidence"]) for r in settled]
-    out_samples = [1 if r["boom_status"] == "BOOM" else 0 for r in settled]
-    calibration = []
-    try:
-        from engine import FootballEngine
-        calibration = FootballEngine.compute_calibration_curve(conf_samples, out_samples)
-    except Exception:
-        pass
-
-    return {
-        "total_settled": total,
-        "won": won,
-        "lost": lost,
-        "win_rate_str": f"{win_rate}%",
-        "brier_score_str": f"{brier:.3f}" if brier is not None else "N/A",
-        "roi_str": f"{roi_pct:+0.1f}%",
-        "status_note": f"Verified across {total} settled fixture outcomes.",
-        "market_breakdown": market_stats,
-        "league_breakdown": league_stats,
-        "calibration_samples": calibration
-    }
-
-
-def set_setting(key, val):
-    execute_db("INSERT OR REPLACE INTO settings (key, val) VALUES (?, ?)", (key, str(val)), commit=True)
-
-
-def get_setting(key, default=""):
-    row = execute_db("SELECT val FROM settings WHERE key = ?", (key,), fetchone=True)
-    return row["val"] if row else default
