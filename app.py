@@ -9,7 +9,7 @@ st.set_page_config(
     page_title="Tactical Edge | Liquid Betting Engine",
     page_icon="⚽",
     layout="wide",
-    initial_sidebar_state="collapsed"  # Clean view: dashboard opens in full width
+    initial_sidebar_state="collapsed"
 )
 
 db.init_db()
@@ -21,7 +21,6 @@ st.markdown("""
     html, body, [class*="css"] { font-family: 'Plus Jakarta Sans', sans-serif; }
     .stApp { background: radial-gradient(circle at 15% 20%, #0d1527 0%, #060913 100%); color: #e2e8f0; }
 
-    /* Banker Hero Container */
     .banker-container {
         position: relative;
         background: linear-gradient(135deg, rgba(16, 185, 129, 0.12) 0%, rgba(6, 182, 212, 0.04) 100%);
@@ -51,7 +50,6 @@ st.markdown("""
     .banker-title { font-size: 2.2rem; font-weight: 800; color: #ffffff; margin-top: 15px; margin-bottom: 5px; }
     .banker-market { font-size: 1.4rem; font-weight: 800; color: #10b981; }
 
-    /* Glass Cards */
     .glass-card {
         background: rgba(255, 255, 255, 0.03);
         backdrop-filter: blur(16px);
@@ -69,17 +67,24 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# ----------------- CONFIGURATION (AUTO-PERSISTED) -----------------
-# 1. Check Streamlit Secrets -> 2. Check SQLite Database
-saved_api_key = db.get_setting("FOOTBALL_API_KEY", "")
-if not saved_api_key and hasattr(st, "secrets") and "FOOTBALL_API_KEY" in st.secrets:
-    saved_api_key = st.secrets["FOOTBALL_API_KEY"]
+# ----------------- SAFE API KEY RETRIEVAL -----------------
+saved_api_key = ""
+if hasattr(db, "get_setting"):
+    saved_api_key = db.get_setting("FOOTBALL_API_KEY", "")
+
+if not saved_api_key:
+    try:
+        if hasattr(st, "secrets") and "FOOTBALL_API_KEY" in st.secrets:
+            saved_api_key = st.secrets["FOOTBALL_API_KEY"]
+    except Exception:
+        pass
 
 with st.sidebar:
     st.markdown("### ⚙️ Engine Settings")
     input_key = st.text_input("football-data.org API Key", value=saved_api_key, type="password")
     if input_key and input_key != saved_api_key:
-        db.set_setting("FOOTBALL_API_KEY", input_key)
+        if hasattr(db, "set_setting"):
+            db.set_setting("FOOTBALL_API_KEY", input_key)
         saved_api_key = input_key
         st.success("API Key saved permanently!")
 
@@ -93,7 +98,7 @@ with st.sidebar:
         st.session_state["force_refresh"] = True
         st.rerun()
 
-# ----------------- AUTO-PILOT FETCH PIPELINE -----------------
+# ----------------- AUTO-PILOT PIPELINE -----------------
 def execute_auto_sync(api_key, start_date, days_ahead, threshold):
     fixtures, err = fetcher.fetch_upcoming_fixtures(api_key, start_date, days_ahead=days_ahead)
     if err or not fixtures:
@@ -126,23 +131,25 @@ def execute_auto_sync(api_key, start_date, days_ahead, threshold):
             count += 1
     return count
 
-# Fetch existing predictions for today onwards
+# Fetch existing predictions safely
 today_str = date.today().strftime("%Y-%m-%d")
-records = db.get_upcoming_predictions(today_str)
+records = []
+if hasattr(db, "get_upcoming_predictions"):
+    records = db.get_upcoming_predictions(today_str)
 
-# If no records exist OR user triggered force refresh, auto-sync immediately!
+# Auto-Sync trigger if empty or forced
 if (not records or st.session_state.get("force_refresh", False)) and saved_api_key:
     st.session_state["force_refresh"] = False
     with st.spinner("⚡ Auto-analyzing matches and locking today's daily predictions..."):
         execute_auto_sync(saved_api_key, today_str, scan_days, min_confidence)
-        records = db.get_upcoming_predictions(today_str)
+        if hasattr(db, "get_upcoming_predictions"):
+            records = db.get_upcoming_predictions(today_str)
 
-# ----------------- MAIN ZERO-CLICK DASHBOARD -----------------
+# ----------------- MAIN DISPLAY -----------------
 st.markdown('<div class="brand-title">Tactical Predictive Suite</div>', unsafe_allow_html=True)
 st.markdown('<div style="color: #94a3b8; margin-bottom: 25px;">Statistically optimized selections with immutable database locks.</div>', unsafe_allow_html=True)
 
 if records:
-    # Sort by highest confidence
     sorted_records = sorted(records, key=lambda x: x[5], reverse=True)
     
     # 💎 1. SURE BANKER OF THE DAY
@@ -174,7 +181,7 @@ if records:
     </div>
     """, unsafe_allow_html=True)
 
-    # 2. TABS: SURE FIXTURES & ALL PREDICTIONS
+    # 2. TABS
     tab1, tab2 = st.tabs(["🛡️ Sure Fixtures (Safe Multi-Bet)", "📊 Daily Odds & Predictions Board"])
 
     with tab1:
@@ -235,9 +242,9 @@ else:
     st.markdown("""
     <div class="glass-card" style="text-align: center; padding: 50px 20px;">
         <div style="font-size: 2.5rem; margin-bottom: 15px;">⚡</div>
-        <div style="font-size: 1.25rem; font-weight: 700; color: #ffffff;">Auto-Pilot Initializing...</div>
+        <div style="font-size: 1.25rem; font-weight: 700; color: #ffffff;">Auto-Pilot Ready</div>
         <div style="color: #94a3b8; font-size: 0.9rem; max-width: 450px; margin: 10px auto 15px auto;">
-            Ensure your API key is saved once in the sidebar. Once saved, matches load automatically on arrival.
+            Paste your API key once in the sidebar. The engine will permanently store it and automatically load matches on arrival.
         </div>
     </div>
     """, unsafe_allow_html=True)
