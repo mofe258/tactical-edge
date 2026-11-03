@@ -1,38 +1,98 @@
+"""
+fetcher.py — Football-Data.org API Client & Standings Cache
+Provides rate-limited fixture fetching, league standings caching,
+live score polling, and robust API key extraction.
+"""
+
+import os
 import requests
 from datetime import datetime, timedelta
-
-# 👉 PASTE YOUR ACTUAL API KEY INSIDE THE QUOTES BELOW:
-API_KEY = "5927ac0ce29e40748c8efca8cacf0f60"
+import streamlit as st
 
 BASE_URL = "https://api.football-data.org/v4"
 
-def fetch_upcoming_fixtures(start_date_str, days_ahead=7):
-    """Fetches matches across the upcoming week using the embedded key."""
-    headers = {"X-Auth-Token": API_KEY.strip()}
-    
-    start_dt = datetime.strptime(start_date_str, "%Y-%m-%d")
-    end_dt = start_dt + timedelta(days=days_ahead)
-    end_date_str = end_dt.strftime("%Y-%m-%d")
 
+def get_api_key():
+    """
+    Safely resolves API Key in priority order:
+    1. Streamlit Secrets (st.secrets["FOOTBALL_API_KEY"])
+    2. Environment Variable (os.getenv("FOOTBALL_API_KEY"))
+    3. SQLite Settings Table
+    """
+    try:
+        if hasattr(st, "secrets") and "FOOTBALL_API_KEY" in st.secrets:
+            key = str(st.secrets["FOOTBALL_API_KEY"]).strip()
+            if key and key != "PASTE_YOUR_API_KEY_HERE":
+                return key
+    except Exception:
+        pass
+
+    env_key = os.getenv("FOOTBALL_API_KEY", "").strip()
+    if env_key:
+        return env_key
+
+    try:
+        from db import get_setting
+        db_key = get_setting("FOOTBALL_API_KEY", "").strip()
+        if db_key and db_key != "PASTE_YOUR_API_KEY_HERE":
+            return db_key
+    except Exception:
+        pass
+
+    return ""
+
+
+@st.cache_data(ttl=600, show_spinner=False)
+def fetch_upcoming_fixtures(start_date_str, days_ahead=7):
+    """
+    Queries matches across the scheduled date window.
+    Cached for 10 minutes to protect the 10 calls/min rate limit.
+    """
+    api_key = get_api_key()
+    if not api_key:
+        return [], "API Key Missing. Add FOOTBALL_API_KEY in the sidebar or Streamlit secrets."
+
+    try:
+        start_dt = datetime.strptime(start_date_str, "%Y-%m-%d")
+        end_dt = start_dt + timedelta(days=days_ahead)
+        end_date_str = end_dt.strftime("%Y-%m-%d")
+    except Exception as e:
+        return [], f"Date parsing error: {e}"
+
+    headers = {"X-Auth-Token": api_key}
     url = f"{BASE_URL}/matches?dateFrom={start_date_str}&dateTo={end_date_str}"
-    
+
     try:
         res = requests.get(url, headers=headers, timeout=12)
         if res.status_code == 200:
-            return res.json().get("matches", []), None
+            matches = res.json().get("matches", [])
+            return matches, None
         elif res.status_code == 403:
-            return [], "API Key Error: Invalid or inactive API key."
+            return [], "Authentication Error (403): Invalid or inactive API key on football-data.org."
         elif res.status_code == 429:
-            return [], "Rate limit: Maximum 10 requests per minute."
+            return [], "Rate limit reached (429): Maximum 10 calls/minute on free tier. Please wait 60 seconds."
         else:
             return [], f"API returned status code: {res.status_code}"
+    except requests.exceptions.Timeout:
+        return [], "Connection timeout: football-data.org did not respond within 12 seconds."
     except Exception as e:
-        return [], f"Connection error: {str(e)}"
+        return [], f"Network error: {str(e)}"
 
+
+@st.cache_data(ttl=3600, show_spinner=False)
 def fetch_standings(competition_code):
-    """Fetches team statistics for calculations."""
-    headers = {"X-Auth-Token": API_KEY.strip()}
+    """
+    Retrieves full league table for a competition in a single call.
+    Caches for 1 hour to prevent redundant requests while supplying
+    accurate goal tallies and attack/defense strength indexes.
+    """
+    api_key = get_api_key()
+    if not api_key:
+        return {}
+
+    headers = {"X-Auth-Token": api_key}
     url = f"{BASE_URL}/competitions/{competition_code}/standings"
+
     try:
         res = requests.get(url, headers=headers, timeout=10)
         if res.status_code == 200:
@@ -43,9 +103,19 @@ def fetch_standings(competition_code):
                     for row in table_group.get("table", []):
                         team_name = row["team"]["name"]
                         played = max(1, row.get("playedGames", 1))
+                        gf = row.get("goalsFor", 0)
+                        ga = row.get("goalsAgainst", 0)
+
+                        # Attack/Defense ratings relative to league average 1.35 goals/match
                         team_stats[team_name] = {
-                            "att_strength": (row.get("goalsFor", 0) / played) / 1.35,
-                            "def_strength": (row.get("goalsAgainst", 0) / played) / 1.35
+                            "att_strength": round(max(0.40, (gf / played) / 1.35), 3),
+                            "def_strength": round(max(0.40, (ga / played) / 1.35), 3),
+                            "played": played,
+                            "gf": gf,
+                            "ga": ga,
+                            "form": row.get("form", "N/A"),
+                            "points": row.get("points", 0),
+                            "position": row.get("position", 0)
                         }
             return team_stats
         return {}
