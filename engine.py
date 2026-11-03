@@ -12,91 +12,103 @@ class FootballEngine:
         return home_xg, away_xg
 
     def predict_full_suite(self, home_xg, away_xg, home_att, home_def, away_att, away_def, max_goals=7):
-        # Goal Matrix
+        # 1. Goal Distribution Matrix
         matrix = np.zeros((max_goals, max_goals))
         for h in range(max_goals):
             for a in range(max_goals):
                 matrix[h][a] = poisson.pmf(h, home_xg) * poisson.pmf(a, away_xg)
 
-        # 1X2
+        # 2. 1X2 Probabilities
         prob_home = float(np.sum(np.tril(matrix, -1)))
         prob_draw = float(np.sum(np.diag(matrix)))
         prob_away = float(np.sum(np.triu(matrix, 1)))
 
-        # Double Chance
+        # 3. Double Chance
         dc_1x = prob_home + prob_draw
         dc_x2 = prob_away + prob_draw
 
-        # Over / Under
+        # 4. Over / Under Goals
+        o05 = float(1.0 - matrix[0][0])
         o15 = float(1.0 - (matrix[0][0] + matrix[1][0] + matrix[0][1]))
         
-        u45 = 0.0
-        for h in range(max_goals):
-            for a in range(max_goals):
-                if h + a <= 4:
-                    u45 += matrix[h][a]
-        u45 = float(u45)
+        u25 = float(np.sum([matrix[h][a] for h in range(max_goals) for a in range(max_goals) if h + a < 2.5]))
+        o25 = 1.0 - u25
+        
+        u45 = float(np.sum([matrix[h][a] for h in range(max_goals) for a in range(max_goals) if h + a <= 4]))
 
-        # Combo: Home & Over 1.5
-        home_and_o15 = 0.0
-        for h in range(max_goals):
-            for a in range(max_goals):
-                if h > a and (h + a >= 2):
-                    home_and_o15 += matrix[h][a]
-        home_and_o15 = float(home_and_o15)
+        # 5. Winning Combos (From SportyBet Slips)
+        # Home & Over 1.5
+        h_and_o15 = float(np.sum([matrix[h][a] for h in range(max_goals) for a in range(max_goals) if h > a and (h + a >= 2)]))
+        # Away & Over 1.5
+        a_and_o15 = float(np.sum([matrix[h][a] for h in range(max_goals) for a in range(max_goals) if a > h and (h + a >= 2)]))
+        # Home & Over 2.5
+        h_and_o25 = float(np.sum([matrix[h][a] for h in range(max_goals) for a in range(max_goals) if h > a and (h + a >= 3)]))
 
-        # Combo: Away & Over 1.5
-        away_and_o15 = 0.0
-        for h in range(max_goals):
-            for a in range(max_goals):
-                if a > h and (h + a >= 2):
-                    away_and_o15 += matrix[h][a]
-        away_and_o15 = float(away_and_o15)
+        # 6. Handicap Cushions (Away does not lose by 3 or more goals)
+        away_handicap_3 = float(np.sum([matrix[h][a] for h in range(max_goals) for a in range(max_goals) if (h - a) < 3]))
 
-        # Handicap Cushion: Away (+2.5) -> Away does not lose by 3 or more
-        away_plus_25 = 0.0
-        for h in range(max_goals):
-            for a in range(max_goals):
-                if (h - a) < 3:
-                    away_plus_25 += matrix[h][a]
-        away_plus_25 = float(away_plus_25)
-
-        # Corners & Cards Models
+        # 7. Corners & Cards Models
         exp_corners = 9.8 * ((home_att + away_att) / 2.0)
         over_85_corners = float(1.0 - poisson.cdf(8, exp_corners))
-
         exp_cards = 4.0 * ((home_def + away_def) / 2.0)
         over_35_cards = float(1.0 - poisson.cdf(3, exp_cards))
 
-        # --- SELECTION LOGIC (Matching your winning slips) ---
-        # Prioritize Combos (Home & O1.5), Ultra Safe Under 4.5, Big Handicap cushions, and DC
+        # --- DYNAMIC MARKET ASSIGNMENT (NO OVER 1.5 REPETITION) ---
         best_market = "Over 1.5 Goals"
         best_prob = o15
+        rec_odds = max(1.10, round((1.0 / o15) * 0.96, 2))
 
-        if home_and_o15 >= 0.72 and prob_home >= 0.70:
-            best_market, best_prob = "Home & Over 1.5", home_and_o15
-        elif away_and_o15 >= 0.68 and prob_away >= 0.65:
-            best_market, best_prob = "Away & Over 1.5", away_and_o15
-        elif dc_x2 >= 0.86 and prob_away > prob_home:
-            best_market, best_prob = "Draw or Away (X2)", dc_x2
+        # Hierarchy matching user's winning tickets:
+        if prob_home >= 0.72 and h_and_o25 >= 0.65:
+            best_market = "Home & Over 2.5"
+            best_prob = h_and_o25
+            rec_odds = 1.35
+        elif prob_home >= 0.68 and h_and_o15 >= 0.62:
+            best_market = "Home & Over 1.5"
+            best_prob = h_and_o15
+            rec_odds = 1.65
+        elif prob_away >= 0.65 and a_and_o15 >= 0.60:
+            best_market = "Away & Over 1.5"
+            best_prob = a_and_o15
+            rec_odds = 1.28
+        elif prob_home >= 0.60 and prob_home < 0.70:
+            best_market = "Home Win (1X2)"
+            best_prob = prob_home
+            rec_odds = 1.75
+        elif prob_away > 0.52 and dc_x2 >= 0.85:
+            best_market = "Draw or Away (X2)"
+            best_prob = dc_x2
+            rec_odds = 1.15
+        elif u45 >= 0.86 and (home_xg + away_xg) < 3.0:
+            best_market = "Under 4.5 Goals"
+            best_prob = u45
+            rec_odds = 1.24
+        elif away_handicap_3 >= 0.88 and prob_home > prob_away:
+            best_market = "Handicap Away (+3.0)"
+            best_prob = away_handicap_3
+            rec_odds = 1.18
+        elif o25 >= 0.75:
+            best_market = "Over 2.5 Goals"
+            best_prob = o25
+            rec_odds = 1.30
         elif dc_1x >= 0.88:
-            best_market, best_prob = "Home or Draw (1X)", dc_1x
-        elif u45 >= 0.88 and (home_xg + away_xg) < 3.2:
-            best_market, best_prob = "Under 4.5 Goals", u45
-        elif away_plus_25 >= 0.90:
-            best_market, best_prob = "Handicap (+2.5)", away_plus_25
-        elif o15 >= 0.85:
-            best_market, best_prob = "Over 1.5 Goals", o15
+            best_market = "Home or Draw (1X)"
+            best_prob = dc_1x
+            rec_odds = 1.12
+        else:
+            best_market = "Over 1.5 Goals"
+            best_prob = o15
+            rec_odds = 1.12
 
         return {
             "best_market": best_market,
             "best_prob": best_prob,
-            "home_and_o15": home_and_o15,
-            "away_and_o15": away_and_o15,
-            "u45_prob": u45,
-            "dc_1x": dc_1x,
+            "est_odds": rec_odds,
+            "h_o15": h_and_o15,
+            "a_o15": a_and_o15,
+            "u45": u45,
             "dc_x2": dc_x2,
-            "handicap_plus": away_plus_25,
-            "corners_prob": over_85_corners,
-            "cards_prob": over_35_cards
+            "handicap": away_handicap_3,
+            "o15": o15,
+            "o05": o05
         }
