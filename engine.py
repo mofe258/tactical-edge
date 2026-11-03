@@ -17,7 +17,7 @@ class FootballEngine:
     def __init__(self, league_avg_home=1.45, league_avg_away=1.15, rho=-0.11):
         self.league_avg_home = league_avg_home
         self.league_avg_away = league_avg_away
-        self.rho = rho  # Dixon-Coles low-score correlation parameter
+        self.rho = rho
 
     def calculate_xg(self, home_att, home_def, away_att, away_def):
         """
@@ -34,9 +34,7 @@ class FootballEngine:
         return float(round(home_xg, 3)), float(round(away_xg, 3))
 
     def _tau_correction(self, h, a, lmbda, mu):
-        """
-        Dixon-Coles adjustment factor tau(x, y) for low scores.
-        """
+        """Dixon-Coles adjustment factor tau(x, y) for low scores."""
         if h == 0 and a == 0:
             return 1.0 - (lmbda * mu * self.rho)
         elif h == 0 and a == 1:
@@ -50,7 +48,7 @@ class FootballEngine:
 
     def compute_score_matrix(self, home_xg, away_xg, max_goals=8):
         """
-        Computes an (8x8) score probability matrix with Dixon-Coles correction,
+        Computes score probability matrix with Dixon-Coles correction,
         strictly renormalized so sum(P) == 1.0.
         """
         matrix = np.zeros((max_goals, max_goals))
@@ -60,7 +58,6 @@ class FootballEngine:
                 tau = self._tau_correction(h, a, home_xg, away_xg)
                 matrix[h][a] = max(0.0, p_ind * tau)
 
-        # Normalize matrix to strictly equal 1.0
         matrix_sum = np.sum(matrix)
         if matrix_sum > 0:
             matrix = matrix / matrix_sum
@@ -104,18 +101,15 @@ class FootballEngine:
         btts_yes = float(np.sum(matrix[1:, 1:]))
         btts_no = 1.0 - btts_yes
 
-        # 5. Asian / European Handicap Cushions
-        # Away (+1.5): Away does not lose by >= 2 goals -> (h - a) < 2
+        # 5. Handicaps
         away_hcap_15 = float(np.sum([
             matrix[h][a] for h in range(max_goals) for a in range(max_goals)
             if (h - a) < 2
         ]))
-        # Away (+2.5): Away does not lose by >= 3 goals
         away_hcap_25 = float(np.sum([
             matrix[h][a] for h in range(max_goals) for a in range(max_goals)
             if (h - a) < 3
         ]))
-        # Home (+1.5): Home does not lose by >= 2 goals
         home_hcap_15 = float(np.sum([
             matrix[h][a] for h in range(max_goals) for a in range(max_goals)
             if (a - h) < 2
@@ -131,12 +125,10 @@ class FootballEngine:
             if a > h and (h + a) >= 2
         ]))
 
-        # Helper to calculate bookmaker margin-adjusted fair odds
         def to_odds(p, margin=0.06):
             p = max(0.01, min(0.99, p))
             return float(round((1.0 / p) * (1.0 - margin), 2))
 
-        # Structure full market dictionary
         markets = {
             "1X2": {
                 "Home Win": {"prob": prob_home, "odds": to_odds(prob_home)},
@@ -171,14 +163,12 @@ class FootballEngine:
             }
         }
 
-        # Deterministic Strategic Recommendation
         best_rec = self._select_optimal_market(
             prob_home, prob_draw, prob_away, dc_1x, dc_x2,
             ou_probs, away_hcap_25, away_hcap_15, h_and_o15, a_and_o15,
             home_xg, away_xg
         )
 
-        # Deterministic, statistical explanation grounded in facts
         explanation = self._generate_explanation(
             home_team, away_team, home_xg, away_xg,
             prob_home, prob_draw, prob_away, best_rec
@@ -193,46 +183,30 @@ class FootballEngine:
             "explanation": explanation
         }
 
-    def _select_optimal_market(self, p_h, p_d, p_a, dc_1x, dc_x2, ou, hcap_a25, hcap_a15, h_o15, a_o15, h_xg, a_xg):
-        """
-        Tactical allocation logic balancing win-probability and edge.
-        Recommends balanced markets (1.20 - 1.75 odds range) without collapsing into single choices.
-        """
-        # Strong home dominance with goal trend
+    def _select_optimal_market(self, p_h, p_d, p_a, dc_1x, dc_x2, ou, hcap_a25, hcap_a15, h_o15, a_o15, home_xg, away_xg):
         if p_h >= 0.64 and h_o15 >= 0.54:
             return {"category": "1X2 & Over/Under 1.5", "pick": "Home & Over 1.5", "prob": h_o15, "odds": round(max(1.40, min(1.85, (1.0 / h_o15) * 0.94)), 2)}
-        # Strong away favorite with goal trend
         if p_a >= 0.58 and a_o15 >= 0.50:
             return {"category": "1X2 & Over/Under 1.5", "pick": "Away & Over 1.5", "prob": a_o15, "odds": round(max(1.30, min(1.75, (1.0 / a_o15) * 0.94)), 2)}
-        # Tricky away trip for a solid side -> Double Chance insurance
         if p_a > p_h and dc_x2 >= 0.78:
             return {"category": "Double Chance", "pick": "Draw or Away (X2)", "prob": dc_x2, "odds": round(max(1.18, min(1.45, (1.0 / dc_x2) * 0.94)), 2)}
-        # Moderate home favoritism -> Home or Draw
         if p_h >= 0.52 and dc_1x >= 0.82:
             return {"category": "Double Chance", "pick": "Home or Draw (1X)", "prob": dc_1x, "odds": round(max(1.15, min(1.40, (1.0 / dc_1x) * 0.94)), 2)}
-        # Heavy favorite vs resilient underdog -> Handicap cushion
         if p_h > 0.65 and hcap_a25 >= 0.86:
             return {"category": "Asian Handicap", "pick": "Away (+2.5)", "prob": hcap_a25, "odds": round(max(1.18, min(1.32, (1.0 / hcap_a25) * 0.95)), 2)}
-        # High offensive match -> Over 2.5
-        if ou["Over 2.5"] >= 0.65 and (h_xg + a_xg) >= 2.9:
+        if ou["Over 2.5"] >= 0.65 and (home_xg + away_xg) >= 2.9:
             return {"category": "Over/Under Goals", "pick": "Over 2.5 Goals", "prob": ou["Over 2.5"], "odds": round(max(1.40, min(1.85, (1.0 / ou["Over 2.5"]) * 0.94)), 2)}
-        # Defensive clash -> Under 3.5
-        if ou["Under 3.5"] >= 0.74 and (h_xg + a_xg) < 2.6:
+        if ou["Under 3.5"] >= 0.74 and (home_xg + away_xg) < 2.6:
             return {"category": "Over/Under Goals", "pick": "Under 3.5 Goals", "prob": ou["Under 3.5"], "odds": round(max(1.22, min(1.45, (1.0 / ou["Under 3.5"]) * 0.94)), 2)}
-        # Default safe floor: Over 1.5
         return {"category": "Over/Under Goals", "pick": "Over 1.5 Goals", "prob": ou["Over 1.5"], "odds": round(max(1.18, min(1.38, (1.0 / ou["Over 1.5"]) * 0.94)), 2)}
 
-    def _generate_explanation(self, home_team, away_team, h_xg, a_xg, p_h, p_d, p_a, rec):
-        """
-        Generates deterministic, grounded statistical rationale for the match analysis view.
-        Does not fabricate injury news or claim guaranteed wins.
-        """
-        tot_xg = round(h_xg + a_xg, 2)
+    def _generate_explanation(self, home_team, away_team, home_xg, away_xg, p_h, p_d, p_a, rec):
+        tot_xg = round(home_xg + away_xg, 2)
         fav_team = home_team if p_h >= p_a else away_team
         fav_prob = max(p_h, p_a) * 100.0
 
         rationale = (
-            f"The Dixon-Coles bivariate model projects an expected goals profile of {h_xg:.2f} xG for {home_team} "
+            f"The Dixon-Coles bivariate model projects an expected goals profile of {home_xg:.2f} xG for {home_team} "
             f"and {away_xg:.2f} xG for {away_team} (Combined Match Expectancy: {tot_xg:.2f} goals). "
             f"{fav_team} holds the tactical initiative with an estimated win probability of {fav_prob:.1f}%. "
             f"The optimal mathematical selection is '{rec['pick']}' ({rec['prob']*100:.1f}% model confidence, "
@@ -242,21 +216,13 @@ class FootballEngine:
         )
         return rationale
 
-    # ------------------ MODEL EVALUATION & CALIBRATION METRICS ------------------
     @staticmethod
     def calculate_brier_score(predictions_matrix, actual_outcomes_vector):
-        """
-        Computes multi-class Brier score for 1X2 distributions:
-        BS = (1/N) * sum_i sum_k (p_ik - y_ik)^2
-        Range: 0.0 (perfect foresight) to 2.0 (complete misclassification).
-        """
         if not len(predictions_matrix) or not len(actual_outcomes_vector):
             return 0.0
         n = len(predictions_matrix)
         total_error = 0.0
         for p_dist, actual in zip(predictions_matrix, actual_outcomes_vector):
-            # p_dist = [prob_h, prob_d, prob_a]
-            # actual in [0, 1, 2] (0=H, 1=D, 2=A)
             target = [0.0, 0.0, 0.0]
             if 0 <= actual <= 2:
                 target[actual] = 1.0
@@ -266,9 +232,6 @@ class FootballEngine:
 
     @staticmethod
     def calculate_binary_log_loss(probabilities, outcomes):
-        """
-        Computes standard cross-entropy log-loss for binary events (e.g. O/U, BTTS, DC).
-        """
         if not len(probabilities):
             return 0.0
         eps = 1e-15
@@ -281,10 +244,6 @@ class FootballEngine:
 
     @staticmethod
     def compute_calibration_curve(probabilities, outcomes, n_bins=5):
-        """
-        Computes empirical calibration bins:
-        Compares average predicted probability against observed empirical hit rate.
-        """
         if not len(probabilities):
             return []
         probs = np.array(probabilities)
