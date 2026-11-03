@@ -17,6 +17,12 @@ def init_db():
                     confidence REAL,
                     locked_at TEXT
                 )''')
+    # Auto-repair: add any missing columns if an old database exists
+    for col, col_type in [("competition", "TEXT"), ("confidence", "REAL"), ("market", "TEXT")]:
+        try:
+            c.execute(f"ALTER TABLE predictions ADD COLUMN {col} {col_type}")
+        except sqlite3.OperationalError:
+            pass  # Column already exists
     conn.commit()
     conn.close()
 
@@ -24,13 +30,11 @@ def save_prediction(match_date, match_id, comp, home, away, market, confidence):
     conn = sqlite3.connect(DB_NAME)
     c = conn.cursor()
     try:
-        c.execute('''INSERT INTO predictions 
+        c.execute('''INSERT OR IGNORE INTO predictions 
                      (match_date, match_id, competition, home_team, away_team, market, confidence, locked_at)
                      VALUES (?, ?, ?, ?, ?, ?, ?, ?)''',
                   (match_date, match_id, comp, home, away, market, confidence, datetime.utcnow().strftime("%H:%M UTC")))
         conn.commit()
-    except sqlite3.IntegrityError:
-        pass  # Already locked, do not modify
     finally:
         conn.close()
 
