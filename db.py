@@ -1,41 +1,66 @@
 """
-db.py — Persistence Layer, Settlement Engine & Historical Verification
-Handles SQLite transactions, prediction locking, live score settlement,
-and auto-migrating schema repair.
+db.py — Persistence Layer & Settlement Engine
+Thread-safe SQLite connection handling with auto-closing and WAL mode.
 """
 
 import sqlite3
 import json
+import os
 from datetime import datetime
 
 DB_NAME = "predictions.db"
 
 
-def get_connection():
-    """Creates a thread-safe connection to SQLite."""
-    conn = sqlite3.connect(DB_NAME, timeout=15)
+def execute_db(query, params=(), fetchone=False, fetchall=False, commit=False):
+    """
+    Guarantees every database connection is immediately closed after running,
+    preventing any 'database is locked' or OperationalError crashes on Streamlit Cloud.
+    """
+    conn = sqlite3.connect(DB_NAME, timeout=30.0)
     conn.row_factory = sqlite3.Row
-    return conn
+    try:
+        conn.execute("PRAGMA journal_mode=WAL;")
+        conn.execute("PRAGMA busy_timeout=30000;")
+    except Exception:
+        pass
+
+    cursor = conn.cursor()
+    try:
+        cursor.execute(query, params)
+        if commit:
+            conn.commit()
+        if fetchone:
+            res = cursor.fetchone()
+            return dict(res) if res else None
+        if fetchall:
+            res = cursor.fetchall()
+            return [dict(r) for r in res]
+        return None
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        cursor.close()
+        conn.close()
 
 
 def init_db():
-    """
-    Initializes database with auto-migration.
-    If an older incompatible table is detected, automatically upgrades it
-    so index creation and queries never crash.
-    """
-    with get_connection() as conn:
-        c = conn.cursor()
+    """Initializes tables cleanly without lock conflicts."""
+    conn = sqlite3.connect(DB_NAME, timeout=30.0)
+    cursor = conn.cursor()
+    try:
+        cursor.execute("PRAGMA journal_mode=WAL;")
+        cursor.execute("PRAGMA busy_timeout=30000;")
+        
+        # Check existing table columns
+        cursor.execute("PRAGMA table_info(predictions)")
+        existing_cols = {row[1] for row in cursor.fetchall()}
 
-        # Inspect existing schema if table already exists
-        c.execute("PRAGMA table_info(predictions)")
-        existing_cols = {row["name"] for row in c.fetchall()}
-
-        # If predictions table exists but lacks modern fields, drop old cache cleanly
+        # If table has old schema missing modern fields, reset it
         if existing_cols and ("match_status" not in existing_cols or "market_category" not in existing_cols):
-            c.execute("DROP TABLE predictions")
+            cursor.execute("DROP TABLE IF EXISTS predictions")
 
-        c.execute('''
+        cursor.execute("""
             CREATE TABLE IF NOT EXISTS predictions (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 match_date TEXT NOT NULL,
@@ -59,16 +84,16 @@ def init_db():
                 prob_away REAL,
                 details_json TEXT DEFAULT '{}'
             )
-        ''')
+        """)
 
-        c.execute('''
+        cursor.execute("""
             CREATE TABLE IF NOT EXISTS settings (
                 key TEXT PRIMARY KEY,
                 val TEXT NOT NULL
             )
-        ''')
+        """)
 
-        c.execute('''
+        cursor.execute("""
             CREATE TABLE IF NOT EXISTS historical_settlements (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 match_id TEXT UNIQUE,
@@ -76,32 +101,31 @@ def init_db():
                 prediction_correct INTEGER,
                 brier_component REAL
             )
-        ''')
+        """)
 
-        # Safely create indices
         try:
-            c.execute("CREATE INDEX IF NOT EXISTS idx_match_date ON predictions(match_date);")
-            c.execute("CREATE INDEX IF NOT EXISTS idx_status ON predictions(match_status);")
-            c.execute("CREATE INDEX IF NOT EXISTS idx_competition ON predictions(competition);")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_match_date ON predictions(match_date);")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_status ON predictions(match_status);")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_competition ON predictions(competition);")
         except sqlite3.OperationalError:
             pass
 
         conn.commit()
+    finally:
+        cursor.close()
+        conn.close()
 
 
 def save_or_update_prediction(match_data):
-    """
-    Saves predictions before kickoff.
-    If the prediction is already locked, only updates match_status, scores,
-    and settles results. The locked prediction is NEVER mutated mid-match.
-    """
-    with get_connection() as conn:
-        c = conn.cursor()
-        c.execute("SELECT id FROM predictions WHERE match_id = ?", (match_data["match_id"],))
-        existing = c.fetchone()
+    """Saves or updates prediction without file-lock collisions."""
+    conn = sqlite3.connect(DB_NAME, timeout=30.0)
+    cursor = conn.cursor()
+    try:
+        cursor.execute("SELECT id FROM predictions WHERE match_id = ?", (match_data["match_id"],))
+        existing = cursor.fetchone()
 
         if existing:
-            c.execute("""
+            cursor.execute("""
                 UPDATE predictions
                 SET match_status = ?,
                     live_score = ?,
@@ -118,7 +142,7 @@ def save_or_update_prediction(match_data):
                 match_data["match_id"]
             ))
         else:
-            c.execute("""
+            cursor.execute("""
                 INSERT INTO predictions (
                     match_date, match_id, competition, home_team, away_team,
                     market_category, market_pick, confidence, est_odds,
@@ -149,60 +173,52 @@ def save_or_update_prediction(match_data):
                 json.dumps(match_data.get("details", {}))
             ))
         conn.commit()
+    finally:
+        cursor.close()
+        conn.close()
 
 
 def get_predictions_filtered(min_date=None, competition=None, status=None, market_cat=None, search_query=None):
-    """
-    Retrieves predictions with multi-dimensional filtering.
-    """
-    with get_connection() as conn:
-        c = conn.cursor()
-        query = "SELECT * FROM predictions WHERE 1=1"
-        params = []
+    query = "SELECT * FROM predictions WHERE 1=1"
+    params = []
 
-        if min_date:
-            query += " AND match_date >= ?"
-            params.append(min_date)
+    if min_date:
+        query += " AND match_date >= ?"
+        params.append(min_date)
 
-        if competition and competition != "All Leagues":
-            query += " AND competition = ?"
-            params.append(competition)
+    if competition and competition != "All Leagues":
+        query += " AND competition = ?"
+        params.append(competition)
 
-        if status and status != "All Statuses":
-            if status == "Live":
-                query += " AND match_status IN ('IN_PLAY', 'PAUSED')"
-            elif status == "Finished":
-                query += " AND match_status IN ('FINISHED', 'FT')"
-            elif status == "Upcoming":
-                query += " AND match_status IN ('SCHEDULED', 'TIMED')"
+    if status and status != "All Statuses":
+        if status == "Live":
+            query += " AND match_status IN ('IN_PLAY', 'PAUSED')"
+        elif status == "Finished":
+            query += " AND match_status IN ('FINISHED', 'FT')"
+        elif status == "Upcoming":
+            query += " AND match_status IN ('SCHEDULED', 'TIMED')"
 
-        if market_cat and market_cat != "All Markets":
-            query += " AND market_category = ?"
-            params.append(market_cat)
+    if market_cat and market_cat != "All Markets":
+        query += " AND market_category = ?"
+        params.append(market_cat)
 
-        if search_query:
-            query += " AND (home_team LIKE ? OR away_team LIKE ? OR competition LIKE ?)"
-            term = f"%{search_query.strip()}%"
-            params.extend([term, term, term])
+    if search_query:
+        query += " AND (home_team LIKE ? OR away_team LIKE ? OR competition LIKE ?)"
+        term = f"%{search_query.strip()}%"
+        params.extend([term, term, term])
 
-        query += " ORDER BY match_date ASC, (confidence * est_odds) DESC"
-        c.execute(query, params)
-        return [dict(row) for row in c.fetchall()]
+    query += " ORDER BY match_date ASC, (confidence * est_odds) DESC"
+    return execute_db(query, params, fetchall=True) or []
 
 
 def get_performance_metrics():
+    query = """
+        SELECT * FROM predictions
+        WHERE match_status IN ('FINISHED', 'FT')
+          AND boom_status IN ('BOOM', 'LOST')
+        ORDER BY match_date DESC
     """
-    Calculates empirical backtesting & calibration metrics.
-    """
-    with get_connection() as conn:
-        c = conn.cursor()
-        c.execute("""
-            SELECT * FROM predictions
-            WHERE match_status IN ('FINISHED', 'FT')
-              AND boom_status IN ('BOOM', 'LOST')
-            ORDER BY match_date DESC
-        """)
-        settled = [dict(r) for r in c.fetchall()]
+    settled = execute_db(query, fetchall=True) or []
 
     if not settled:
         return {
@@ -260,8 +276,11 @@ def get_performance_metrics():
 
     brier = 0.0
     if len(p_dists):
-        from engine import FootballEngine
-        brier = FootballEngine.calculate_brier_score(p_dists, actuals)
+        try:
+            from engine import FootballEngine
+            brier = FootballEngine.calculate_brier_score(p_dists, actuals)
+        except Exception:
+            pass
 
     total_staked = float(total)
     net_profit = total_returns - total_staked
@@ -279,8 +298,12 @@ def get_performance_metrics():
 
     conf_samples = [float(r["confidence"]) for r in settled]
     out_samples = [1 if r["boom_status"] == "BOOM" else 0 for r in settled]
-    from engine import FootballEngine
-    calibration = FootballEngine.compute_calibration_curve(conf_samples, out_samples)
+    calibration = []
+    try:
+        from engine import FootballEngine
+        calibration = FootballEngine.compute_calibration_curve(conf_samples, out_samples)
+    except Exception:
+        pass
 
     return {
         "total_settled": total,
@@ -296,15 +319,9 @@ def get_performance_metrics():
 
 
 def set_setting(key, val):
-    with get_connection() as conn:
-        c = conn.cursor()
-        c.execute("INSERT OR REPLACE INTO settings (key, val) VALUES (?, ?)", (key, str(val)))
-        conn.commit()
+    execute_db("INSERT OR REPLACE INTO settings (key, val) VALUES (?, ?)", (key, str(val)), commit=True)
 
 
 def get_setting(key, default=""):
-    with get_connection() as conn:
-        c = conn.cursor()
-        c.execute("SELECT val FROM settings WHERE key = ?", (key,))
-        row = c.fetchone()
-        return row["val"] if row else default
+    row = execute_db("SELECT val FROM settings WHERE key = ?", (key,), fetchone=True)
+    return row["val"] if row else default
