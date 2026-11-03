@@ -242,9 +242,7 @@ def sync_pipeline():
 
         h_xg, a_xg = engine.calculate_xg(
             h_stat["att_strength"], h_stat["def_strength"],
-            a_stat["att_strength"], a_stat["def_strength"],
-            home_games=h_stat.get("played", 10),
-            away_games=a_stat.get("played", 10)
+            a_stat["att_strength"], a_stat["def_strength"]
         )
 
         match_analysis = engine.predict_full_match(h_xg, a_xg, h_team, a_team)
