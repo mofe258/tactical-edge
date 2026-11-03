@@ -1,7 +1,7 @@
 """
 app.py — TacticalEdge Platform
-Institutional Football Intelligence Dashboard with kick-off times, evidence
-quality scores, team crests, and grounded statistical explanations.
+Institutional Football Intelligence Dashboard with strict single-day locking.
+Matches from different days never mix on accumulator tickets.
 """
 
 import streamlit as st
@@ -63,7 +63,6 @@ st.markdown("""
         margin-top: 2px;
     }
 
-    /* Live Data Freshness Badge */
     .freshness-pill {
         display: inline-flex;
         align-items: center;
@@ -240,7 +239,6 @@ st.markdown("""
         background: #182238 !important;
     }
 
-    /* Mobile Responsive Optimizations */
     @media (max-width: 768px) {
         .top-bar {
             flex-direction: column;
@@ -256,11 +254,12 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
+# ----------------- DATE SELECTION (DEFAULTS STRICTLY TO TODAY) -----------------
 today_str = date.today().strftime("%Y-%m-%d")
 
 
-# ----------------- SYNCHRONIZATION PIPELINE -----------------
 def sync_pipeline():
+    # Sync from today forward across 7 days so database stays ahead
     fixtures, err = fetcher.fetch_upcoming_fixtures(today_str, days_ahead=7)
     if err or not fixtures:
         return 0, err
@@ -278,7 +277,6 @@ def sync_pipeline():
         utc_datetime_str = m.get("utcDate", "")
         m_date = utc_datetime_str[:10] if utc_datetime_str else today_str
 
-        # Parse kickoff time into UTC format
         kickoff_time = "TBD"
         if len(utc_datetime_str) >= 16:
             try:
@@ -304,7 +302,6 @@ def sync_pipeline():
         h_crest = m["homeTeam"].get("crest", "")
         a_crest = m["awayTeam"].get("crest", "")
 
-        # Look up by ID first, then name fallback to eliminate duplicate defaults
         h_stat = team_stats.get(h_id) or team_stats.get(h_team) or {"att_strength": 1.05, "def_strength": 0.95, "played": 8}
         a_stat = team_stats.get(a_id) or team_stats.get(a_team) or {"att_strength": 0.95, "def_strength": 1.05, "played": 8}
 
@@ -324,7 +321,6 @@ def sync_pipeline():
         )
         rec = match_analysis["recommendation"]
 
-        # Settlement check
         boom_status = "PENDING"
         if status in ['FINISHED', 'FT'] and h_goals is not None and a_goals is not None:
             pick = rec["pick"]
@@ -376,12 +372,12 @@ def sync_pipeline():
     return count, None
 
 
-# Auto-sync if database is empty on arrival
-existing_matches = db.get_predictions_filtered(min_date=today_str)
-if not existing_matches and fetcher.get_api_key():
-    with st.spinner("Connecting API feed and calculating calibrated models..."):
+# Check today's matches
+existing_today = db.get_predictions_filtered(exact_date=today_str)
+if not existing_today and fetcher.get_api_key():
+    with st.spinner("Connecting API feed and calculating today's calibrated models..."):
         sync_pipeline()
-        existing_matches = db.get_predictions_filtered(min_date=today_str)
+        existing_today = db.get_predictions_filtered(exact_date=today_str)
 
 # ----------------- SIDEBAR -----------------
 with st.sidebar:
@@ -390,7 +386,7 @@ with st.sidebar:
     inp_key = st.text_input("Football-Data.org API Key", value=curr_key, type="password")
     if inp_key and inp_key != curr_key:
         db.set_setting("FOOTBALL_API_KEY", inp_key)
-        st.success("API key stored.")
+        st.success("API Key updated.")
 
     st.markdown("---")
     st.markdown("**Data Attribution**")
@@ -407,7 +403,7 @@ with st.sidebar:
             st.success(f"Synced {count} fixtures.")
             st.rerun()
 
-# ----------------- TOP NAVBAR & FRESHNESS STATUS -----------------
+# ----------------- TOP NAVBAR & DATE LOCK -----------------
 sync_status = db.get_setting("sync_status", "Awaiting Initial Sync")
 last_sync_time = db.get_setting("last_successful_sync", "Never")
 dot_class = "status-dot-green" if "Live" in sync_status or "Updated" in sync_status else "status-dot-amber"
@@ -425,18 +421,33 @@ st.markdown(f"""
 </div>
 """, unsafe_allow_html=True)
 
+# ----------------- STRICT DAILY DATE FILTER -----------------
+# Defaults strictly to TODAY. As soon as 12am hits, date.today() automatically advances to the new day.
+d_col1, d_col2 = st.columns([1.5, 3.5])
+with d_col1:
+    selected_date_obj = st.date_input("🗓️ Active Betting Date", value=date.today())
+    active_date_str = selected_date_obj.strftime("%Y-%m-%d")
+
+with d_col2:
+    if active_date_str == today_str:
+        st.caption(f"🟢 **Showing Today's Fixtures Only ({active_date_str})**. Tickets will strictly use matches playing today.")
+    else:
+        st.caption(f"Viewing archived or scheduled fixtures for **{active_date_str}**.")
+
+# Pull strictly for this single day
+daily_matches = db.get_predictions_filtered(exact_date=active_date_str)
+
 # 4 Performance Metric Cards
 perf = db.get_performance_metrics()
-today_count = len([m for m in existing_matches if m["match_date"] == today_str])
-total_horizon_count = len(existing_matches)
+today_match_count = len(daily_matches)
 
 k_cols = st.columns(4)
 with k_cols[0]:
     st.markdown(f"""
     <div class="kpi-card">
-        <div class="kpi-label">Fixtures Analysed</div>
-        <div class="kpi-val">{total_horizon_count}</div>
-        <div class="kpi-note">{today_count} scheduled for today</div>
+        <div class="kpi-label">Matches Today</div>
+        <div class="kpi-val">{today_match_count}</div>
+        <div class="kpi-note">{active_date_str}</div>
     </div>
     """, unsafe_allow_html=True)
 
@@ -446,7 +457,7 @@ with k_cols[1]:
     <div class="kpi-card">
         <div class="kpi-label">Settled Predictions</div>
         <div class="kpi-val">{settled_display}</div>
-        <div class="kpi-note">{"Awaiting match completions" if perf['total_settled'] == 0 else f"{perf['won']} Won, {perf['lost']} Lost"}</div>
+        <div class="kpi-note">{"Awaiting completions" if perf['total_settled'] == 0 else f"{perf['won']} Won, {perf['lost']} Lost"}</div>
     </div>
     """, unsafe_allow_html=True)
 
@@ -456,7 +467,7 @@ with k_cols[2]:
     <div class="kpi-card">
         <div class="kpi-label">Historical Accuracy</div>
         <div class="kpi-val" style="color: {rate_color};">{perf['win_rate_str']}</div>
-        <div class="kpi-note">Calculated only on settled picks</div>
+        <div class="kpi-note">Settled predictions only</div>
     </div>
     """, unsafe_allow_html=True)
 
@@ -566,23 +577,23 @@ def render_fixture_card(m, key_prefix):
 
 
 # =============================================================================
-# TAB 1: DAILY INTELLIGENCE
+# TAB 1: DAILY INTELLIGENCE (STRICTLY FOR ACTIVE DAY)
 # =============================================================================
 with main_tabs[0]:
     f1, f2, f3, f4 = st.columns([2, 1.5, 1.5, 1.5])
     with f1:
         search_term = st.text_input("Search teams or competitions", placeholder="e.g. Arsenal, Real Madrid, Premier League")
     with f2:
-        leagues = ["All Leagues"] + sorted(list({r["competition"] for r in existing_matches}))
+        leagues = ["All Leagues"] + sorted(list({r["competition"] for r in daily_matches}))
         sel_comp = st.selectbox("Competition Filter", leagues)
     with f3:
         sel_stat = st.selectbox("Match Status", ["All Statuses", "Upcoming", "Live", "Finished", "Postponed"])
     with f4:
-        mkts = ["All Markets"] + sorted(list({r["market_category"] for r in existing_matches}))
+        mkts = ["All Markets"] + sorted(list({r["market_category"] for r in daily_matches}))
         sel_mkt = st.selectbox("Market Filter", mkts)
 
     filtered = db.get_predictions_filtered(
-        min_date=today_str,
+        exact_date=active_date_str,
         competition=sel_comp,
         status=sel_stat,
         market_cat=sel_mkt,
@@ -590,26 +601,26 @@ with main_tabs[0]:
     )
 
     if filtered:
-        st.caption(f"Showing {len(filtered)} fixtures analysed by the predictive engine.")
+        st.caption(f"Showing {len(filtered)} fixtures scheduled strictly for **{active_date_str}**.")
         cols = st.columns(2)
         for idx, item in enumerate(filtered):
             with cols[idx % 2]:
                 render_fixture_card(item, key_prefix=f"daily_{idx}")
     else:
-        st.info("No fixtures found matching your active filter criteria.")
+        st.info(f"No fixtures scheduled for {active_date_str}. If today is an off-day, check the date picker above for the upcoming match day.")
 
 # =============================================================================
-# TAB 2: ELITE MATCHES
+# TAB 2: ELITE MATCHES (STRICTLY FOR ACTIVE DAY)
 # =============================================================================
 with main_tabs[1]:
-    st.caption("Curated fixtures featuring European powerhouses and English Premier League contenders.")
+    st.caption(f"Curated powerhouse and Premier League fixtures playing on **{active_date_str}**.")
     ELITE_KW = [
         "manchester city", "arsenal", "liverpool", "chelsea", "tottenham", "manchester united",
         "real madrid", "barcelona", "atletico", "bayern", "dortmund", "leverkusen",
         "inter", "milan", "juventus", "napoli", "paris saint-germain", "psg", "sporting", "benfica"
     ]
     elite_matches = [
-        r for r in existing_matches
+        r for r in daily_matches
         if any(k in f"{r['home_team']} {r['away_team']}".lower() for k in ELITE_KW)
         or r["competition"] in ["Premier League", "UEFA Champions League"]
     ]
@@ -620,20 +631,22 @@ with main_tabs[1]:
             with cols_e[idx % 2]:
                 render_fixture_card(item, key_prefix=f"elite_{idx}")
     else:
-        st.info("No elite powerhouse fixtures scheduled in the current 7-day query horizon.")
+        st.info(f"No marquee powerhouse fixtures playing on {active_date_str}.")
 
 # =============================================================================
-# TAB 3: ACCUMULATOR ANALYSIS
+# TAB 3: ACCUMULATOR ANALYSIS (STRICTLY SINGLE-DAY SLIPS)
 # =============================================================================
 with main_tabs[2]:
-    st.caption("Mathematical multi-bet compounder stacking calibrated model selections to hit targeted ticket odds.")
+    st.caption(f"Multi-bet compounder strictly stacking matches playing on **{active_date_str}**. Different days are never mixed.")
+
     tier = st.radio("Target Compound Tier:", ["3.00x Odds", "5.00x Odds", "10.00x Odds", "15.00x Boom Slip", "50.00x Multi"], horizontal=True)
     t_val = {"3.00x Odds": 3.0, "5.00x Odds": 5.0, "10.00x Odds": 10.0, "15.00x Boom Slip": 14.5, "50.00x Multi": 50.0}[tier]
 
     legs = []
     accum_odds = 1.0
 
-    for r in existing_matches:
+    # Only compound matches playing ON THE ACTIVE DAY
+    for r in daily_matches:
         accum_odds *= float(r["est_odds"])
         legs.append(r)
         if accum_odds >= t_val:
@@ -643,39 +656,42 @@ with main_tabs[2]:
     sample_stake = 2000
     est_ret = f"₦{round(sample_stake * accum_odds):,}"
 
-    st.markdown(f"""
-    <div style="background: #101626; border: 1px solid #1A2234; border-radius: 10px; padding: 18px; margin-bottom: 16px;">
-        <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px dashed #1A2234; padding-bottom: 12px; margin-bottom: 12px; flex-wrap: wrap;">
-            <div>
-                <span style="background: rgba(16, 185, 129, 0.15); color: #10B981; padding: 3px 8px; border-radius: 4px; font-size: 0.75rem; font-weight: 700;">
-                    {tier} Package ({len(legs)} Legs)
-                </span>
-                <div style="font-size: 1.35rem; font-weight: 800; color: #FFFFFF; margin-top: 4px;">Compound Odds: {accum_odds:.2f}</div>
-            </div>
-            <div>
-                <div style="font-size: 0.72rem; color: #64748B; text-transform: uppercase;">Estimated Payout (₦{sample_stake:,} Stake)</div>
-                <div style="font-size: 1.45rem; font-weight: 800; color: #10B981;">{est_ret}</div>
+    if legs:
+        st.markdown(f"""
+        <div style="background: #101626; border: 1px solid #1A2234; border-radius: 10px; padding: 18px; margin-bottom: 16px;">
+            <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px dashed #1A2234; padding-bottom: 12px; margin-bottom: 12px; flex-wrap: wrap;">
+                <div>
+                    <span style="background: rgba(16, 185, 129, 0.15); color: #10B981; padding: 3px 8px; border-radius: 4px; font-size: 0.75rem; font-weight: 700;">
+                        {tier} Package ({len(legs)} Legs • {active_date_str})
+                    </span>
+                    <div style="font-size: 1.35rem; font-weight: 800; color: #FFFFFF; margin-top: 4px;">Compound Odds: {accum_odds:.2f}</div>
+                </div>
+                <div>
+                    <div style="font-size: 0.72rem; color: #64748B; text-transform: uppercase;">Estimated Payout (₦{sample_stake:,} Stake)</div>
+                    <div style="font-size: 1.45rem; font-weight: 800; color: #10B981;">{est_ret}</div>
+                </div>
             </div>
         </div>
-    </div>
-    """, unsafe_allow_html=True)
+        """, unsafe_allow_html=True)
 
-    t_cols = st.columns(2)
-    for idx, leg in enumerate(legs):
-        with t_cols[idx % 2]:
-            st.markdown(f"""
-            <div style="background: #0C1220; border: 1px solid #1A2234; border-radius: 8px; padding: 10px 14px; margin-bottom: 8px; display: flex; justify-content: space-between; align-items: center;">
-                <div>
-                    <div style="font-size: 0.68rem; color: #64748B;">{leg['competition']} • {leg['match_date']} ({leg.get('kickoff_time', 'TBD')})</div>
-                    <div style="font-weight: 700; color: #FFFFFF; font-size: 0.9rem;">{leg['home_team']} vs {leg['away_team']}</div>
-                    <div style="color: #38BDF8; font-weight: 700; font-size: 0.85rem; margin-top: 2px;">⚡ {leg['market_pick']}</div>
+        t_cols = st.columns(2)
+        for idx, leg in enumerate(legs):
+            with t_cols[idx % 2]:
+                st.markdown(f"""
+                <div style="background: #0C1220; border: 1px solid #1A2234; border-radius: 8px; padding: 10px 14px; margin-bottom: 8px; display: flex; justify-content: space-between; align-items: center;">
+                    <div>
+                        <div style="font-size: 0.68rem; color: #64748B;">{leg['competition']} • {leg['match_date']} ({leg.get('kickoff_time', 'TBD')})</div>
+                        <div style="font-weight: 700; color: #FFFFFF; font-size: 0.9rem;">{leg['home_team']} vs {leg['away_team']}</div>
+                        <div style="color: #38BDF8; font-weight: 700; font-size: 0.85rem; margin-top: 2px;">⚡ {leg['market_pick']}</div>
+                    </div>
+                    <div style="text-align: right;">
+                        <span class="tag-prob">{leg['confidence']*100:.1f}%</span>
+                        <div style="font-weight: 800; color: #F59E0B; font-size: 0.9rem; margin-top: 4px;">@{leg['est_odds']:.2f}</div>
+                    </div>
                 </div>
-                <div style="text-align: right;">
-                    <span class="tag-prob">{leg['confidence']*100:.1f}%</span>
-                    <div style="font-weight: 800; color: #F59E0B; font-size: 0.9rem; margin-top: 4px;">@{leg['est_odds']:.2f}</div>
-                </div>
-            </div>
-            """, unsafe_allow_html=True)
+                """, unsafe_allow_html=True)
+    else:
+        st.info(f"No matches available on {active_date_str} to construct an accumulator.")
 
 # =============================================================================
 # TAB 4: MODEL PERFORMANCE & CALIBRATION
@@ -711,12 +727,12 @@ with main_tabs[3]:
 # TAB 5: MATCH ANALYTICS
 # =============================================================================
 with main_tabs[4]:
-    st.caption("Interactive deep-dive into Dixon-Coles goal expectation matrices and market distributions.")
+    st.caption(f"Interactive deep-dive into matches scheduled for **{active_date_str}**.")
 
-    if existing_matches:
-        match_options = [f"{m['match_date']} {m.get('kickoff_time', '')} | {m['home_team']} vs {m['away_team']} ({m['competition']})" for m in existing_matches]
+    if daily_matches:
+        match_options = [f"{m['kickoff_time']} | {m['home_team']} vs {m['away_team']} ({m['competition']})" for m in daily_matches]
         sel_idx = st.selectbox("Select Fixture for Deep Analysis:", range(len(match_options)), format_func=lambda i: match_options[i])
-        selected_m = existing_matches[sel_idx]
+        selected_m = daily_matches[sel_idx]
         details = json.loads(selected_m.get("details_json", "{}"))
 
         if details:
@@ -737,7 +753,6 @@ with main_tabs[4]:
             with d3:
                 st.metric("Model Prime Selection", f"{selected_m['market_pick']} (@{selected_m['est_odds']:.2f})")
 
-            # 1X2 Probabilities Bar
             st.markdown("##### 1X2 Match Winner Probability Distribution")
             p_h = details.get("prob_home", 0.33) * 100
             p_d = details.get("prob_draw", 0.33) * 100
@@ -749,7 +764,6 @@ with main_tabs[4]:
             }])
             st.table(p_df)
 
-            # Full Markets Table
             mkts = details.get("markets", {})
             if mkts:
                 st.markdown("##### Comprehensive Market Pricing")
@@ -764,7 +778,7 @@ with main_tabs[4]:
                         })
                 st.dataframe(pd.DataFrame(m_list), hide_index=True, use_container_width=True)
     else:
-        st.info("No fixtures available for deep match analytics.")
+        st.info(f"No fixtures available for analysis on {active_date_str}.")
 
 # =============================================================================
 # TAB 6: MODEL TRANSPARENCY
