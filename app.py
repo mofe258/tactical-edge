@@ -28,11 +28,13 @@ with st.sidebar:
         if not api_key:
             st.error("Please enter your API Key!")
         else:
-            with st.spinner("Fetching matches and analyzing stats..."):
-                fixtures = fetcher.fetch_daily_fixtures(api_key, selected_date)
-                if not fixtures:
-                    st.warning("No matches scheduled or free-tier league matches for today.")
-                else:
+          with st.spinner("Fetching matches and analyzing stats..."):
+            fixtures, err_msg = fetcher.fetch_daily_fixtures(api_key, selected_date)
+            if err_msg:
+                st.error(err_msg)
+            elif not fixtures:
+                st.warning(f"No free-tier matches scheduled for {selected_date}. Try selecting the upcoming weekend!")
+            else:
                     engine = FootballEngine()
                     standings_cache = {}
                     count = 0
