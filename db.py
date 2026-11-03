@@ -1,21 +1,17 @@
 """
 db.py — Persistence Layer & Settlement Engine
-Thread-safe SQLite connection handling with auto-closing and WAL mode.
+Handles SQLite transactions, team crest persistence, accurate metric reporting,
+and N/A handling for zero-observation states.
 """
 
 import sqlite3
 import json
-import os
 from datetime import datetime
 
 DB_NAME = "predictions.db"
 
 
 def execute_db(query, params=(), fetchone=False, fetchall=False, commit=False):
-    """
-    Guarantees every database connection is immediately closed after running,
-    preventing any 'database is locked' or OperationalError crashes on Streamlit Cloud.
-    """
     conn = sqlite3.connect(DB_NAME, timeout=30.0)
     conn.row_factory = sqlite3.Row
     try:
@@ -45,19 +41,16 @@ def execute_db(query, params=(), fetchone=False, fetchall=False, commit=False):
 
 
 def init_db():
-    """Initializes tables cleanly without lock conflicts."""
     conn = sqlite3.connect(DB_NAME, timeout=30.0)
     cursor = conn.cursor()
     try:
         cursor.execute("PRAGMA journal_mode=WAL;")
         cursor.execute("PRAGMA busy_timeout=30000;")
         
-        # Check existing table columns
         cursor.execute("PRAGMA table_info(predictions)")
         existing_cols = {row[1] for row in cursor.fetchall()}
 
-        # If table has old schema missing modern fields, reset it
-        if existing_cols and ("match_status" not in existing_cols or "market_category" not in existing_cols):
+        if existing_cols and ("home_crest" not in existing_cols or "match_status" not in existing_cols):
             cursor.execute("DROP TABLE IF EXISTS predictions")
 
         cursor.execute("""
@@ -68,6 +61,8 @@ def init_db():
                 competition TEXT NOT NULL,
                 home_team TEXT NOT NULL,
                 away_team TEXT NOT NULL,
+                home_crest TEXT DEFAULT '',
+                away_crest TEXT DEFAULT '',
                 market_category TEXT NOT NULL,
                 market_pick TEXT NOT NULL,
                 confidence REAL NOT NULL,
@@ -93,16 +88,6 @@ def init_db():
             )
         """)
 
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS historical_settlements (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                match_id TEXT UNIQUE,
-                settled_at TEXT,
-                prediction_correct INTEGER,
-                brier_component REAL
-            )
-        """)
-
         try:
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_match_date ON predictions(match_date);")
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_status ON predictions(match_status);")
@@ -117,7 +102,6 @@ def init_db():
 
 
 def save_or_update_prediction(match_data):
-    """Saves or updates prediction without file-lock collisions."""
     conn = sqlite3.connect(DB_NAME, timeout=30.0)
     cursor = conn.cursor()
     try:
@@ -145,17 +129,19 @@ def save_or_update_prediction(match_data):
             cursor.execute("""
                 INSERT INTO predictions (
                     match_date, match_id, competition, home_team, away_team,
-                    market_category, market_pick, confidence, est_odds,
-                    locked_at, tactical_tag, match_status, live_score,
-                    boom_status, full_time_home, full_time_away,
-                    prob_home, prob_draw, prob_away, details_json
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    home_crest, away_crest, market_category, market_pick,
+                    confidence, est_odds, locked_at, tactical_tag,
+                    match_status, live_score, boom_status, full_time_home,
+                    full_time_away, prob_home, prob_draw, prob_away, details_json
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (
                 match_data["match_date"],
                 match_data["match_id"],
                 match_data["competition"],
                 match_data["home_team"],
                 match_data["away_team"],
+                match_data.get("home_crest", ""),
+                match_data.get("away_crest", ""),
                 match_data["market_category"],
                 match_data["market_pick"],
                 match_data["confidence"],
@@ -212,6 +198,10 @@ def get_predictions_filtered(min_date=None, competition=None, status=None, marke
 
 
 def get_performance_metrics():
+    """
+    Returns actual empirical backtesting metrics.
+    When 0 matches have settled, explicitly returns N/A to avoid misleading 0.000 Brier scores.
+    """
     query = """
         SELECT * FROM predictions
         WHERE match_status IN ('FINISHED', 'FT')
@@ -225,9 +215,10 @@ def get_performance_metrics():
             "total_settled": 0,
             "won": 0,
             "lost": 0,
-            "win_rate": 0.0,
-            "brier_score": 0.0,
-            "roi_1u": 0.0,
+            "win_rate_str": "N/A",
+            "brier_score_str": "N/A",
+            "roi_str": "N/A",
+            "status_note": "Awaiting match conclusions (N=0 settled). Historical metrics generate automatically after full-time.",
             "market_breakdown": {},
             "league_breakdown": {},
             "calibration_samples": []
@@ -309,9 +300,10 @@ def get_performance_metrics():
         "total_settled": total,
         "won": won,
         "lost": lost,
-        "win_rate": win_rate,
-        "brier_score": brier,
-        "roi_1u": roi_pct,
+        "win_rate_str": f"{win_rate}%",
+        "brier_score_str": f"{brier:.3f}" if brier is not None else "N/A",
+        "roi_str": f"{roi_pct:+0.1f}%",
+        "status_note": f"Verified across {total} settled fixture outcomes.",
         "market_breakdown": market_stats,
         "league_breakdown": league_stats,
         "calibration_samples": calibration
