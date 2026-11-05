@@ -1,7 +1,7 @@
 """
-engine.py — Chaos-Proof Football Intelligence Engine for Queen Rins
-Implements Dixon-Coles Bivariate Poisson, Bayesian Rating Shrinkage,
-Asian Handicap + DNB Cushions, and Empirical Calibration Scoring.
+engine.py — Diverse High-Value Market Prediction Engine for Queen Rins
+Allocates natural, playable betting markets:
+Straight Wins, Double Chance (1X/X2), Draw No Bet (DNB), Over/Under.
 """
 
 import numpy as np
@@ -30,9 +30,8 @@ class FootballEngine:
         home_xg = h_att_shrunk * a_def_shrunk * self.league_avg_home
         away_xg = a_att_shrunk * h_def_shrunk * self.league_avg_away
 
-        # Apply tactical reality: European cup matches average 2.4 goals, not 3.5
-        home_xg = float(np.clip(home_xg, 0.45, 2.50))
-        away_xg = float(np.clip(away_xg, 0.40, 2.10))
+        home_xg = float(np.clip(home_xg, 0.45, 2.60))
+        away_xg = float(np.clip(away_xg, 0.40, 2.20))
 
         return float(round(home_xg, 2)), float(round(away_xg, 2))
 
@@ -74,32 +73,26 @@ class FootballEngine:
             prob_draw /= total_1x2
             prob_away /= total_1x2
 
-        # Draw No Bet (DNB)
         dnb_home = prob_home / (prob_home + prob_away) if (prob_home + prob_away) > 0 else 0.5
         dnb_away = prob_away / (prob_home + prob_away) if (prob_home + prob_away) > 0 else 0.5
 
-        # Double Chance
         dc_1x = min(0.92, prob_home + prob_draw)
         dc_x2 = min(0.92, prob_away + prob_draw)
 
-        # Asian Handicap +1.5 (Wins if team wins, draws, OR loses by only 1 goal!)
-        away_plus_15 = float(np.sum([matrix[h][a] for h in range(max_goals) for a in range(max_goals) if (a + 1.5) > h]))
-        home_plus_15 = float(np.sum([matrix[h][a] for h in range(max_goals) for a in range(max_goals) if (h + 1.5) > a]))
-
-        # Over / Under
-        u_25 = float(np.sum([matrix[h][a] for h in range(max_goals) for a in range(max_goals) if h + a < 2.5]))
+        o_15 = float(np.sum([matrix[h][a] for h in range(max_goals) for a in range(max_goals) if h + a >= 1.5]))
+        o_25 = float(np.sum([matrix[h][a] for h in range(max_goals) for a in range(max_goals) if h + a >= 2.5]))
         u_35 = float(np.sum([matrix[h][a] for h in range(max_goals) for a in range(max_goals) if h + a < 3.5]))
 
-        # Allocator: Enforce Chaos-Proof Selection
-        rec = self._select_chaos_proof_market(
+        # High-Value Natural Market Allocation
+        rec = self._select_natural_market(
             prob_home, prob_draw, prob_away, dnb_home, dnb_away,
-            dc_1x, dc_x2, away_plus_15, home_plus_15, u_25, u_35, home_xg, away_xg
+            dc_1x, dc_x2, o_15, o_25, u_35, home_xg, away_xg
         )
 
         explanation = {
-            "summary": f"Model xG: {home_team} {home_xg:.2f} vs {away_team} {away_xg:.2f}.",
-            "supporting": f"Selected '{rec['pick']}' to guard against tactical clean-sheet upsets.",
-            "risk": f"Draw factor: {prob_draw*100:.1f}%. Handicap & DNB cushions applied."
+            "summary": f"xG Expectancy: {home_team} ({home_xg:.2f}) vs {away_team} ({away_xg:.2f}).",
+            "supporting": f"Allocated '{rec['pick']}' based on match profile and value edge.",
+            "risk": f"Draw risk is {prob_draw*100:.1f}%."
         }
 
         return {
@@ -108,49 +101,55 @@ class FootballEngine:
             "prob_home": prob_home,
             "prob_draw": prob_draw,
             "prob_away": prob_away,
-            "evidence_quality": "Chaos-Proof",
+            "evidence_quality": "High-Yield",
             "reliability_score": round(rec["prob"] * 100, 1),
             "recommendation": rec,
             "explanation": explanation
         }
 
-    def _select_chaos_proof_market(self, p_h, p_d, p_a, dnb_h, dnb_a, dc_1x, dc_x2, a_p15, h_p15, u_25, u_35, h_xg, a_xg):
-        candidates = []
+    def _select_natural_market(self, p_h, p_d, p_a, dnb_h, dnb_a, dc_1x, dc_x2, o_15, o_25, u_35, h_xg, a_xg):
+        """
+        Selects standard, playable markets that actually match each game:
+        - Heavy favorites get Straight Win (Home/Away Win)
+        - Competitive matches get Double Chance (1X/X2) or Draw No Bet (DNB)
+        - Open games get Over 2.5; tight games get Under 3.5
+        """
+        tot_xg = h_xg + a_xg
 
-        # 1. Asian Handicap (+1.5) — Survives 0-1, 1-1, 0-0, 0-2
-        if a_p15 >= 0.78 and p_a >= 0.35:
-            candidates.append({"category": "Asian Handicap", "pick": "Away (+1.5)", "prob": a_p15, "odds": round(max(1.30, (1.0 / a_p15) * 0.94), 2), "safety": a_p15 * 1.30})
-        if h_p15 >= 0.80 and p_h >= 0.40:
-            candidates.append({"category": "Asian Handicap", "pick": "Home (+1.5)", "prob": h_p15, "odds": round(max(1.25, (1.0 / h_p15) * 0.94), 2), "safety": h_p15 * 1.28})
+        # 1. Clear Home Favorite (e.g. Atalanta, Monaco, Copenhagen) -> Home Win
+        if p_h >= 0.58 and p_d <= 0.24:
+            return {"category": "1X2", "pick": "Home Win", "prob": round(p_h, 3), "odds": round(max(1.40, (1.0 / p_h) * 0.94), 2)}
 
-        # 2. Draw No Bet (DNB) — Stake refunded if game ends in a draw
-        if dnb_h >= 0.65 and p_h > p_a:
-            candidates.append({"category": "Draw No Bet", "pick": "Home DNB", "prob": dnb_h, "odds": round(max(1.38, (1.0 / dnb_h) * 0.93), 2), "safety": dnb_h * 1.22})
-        if dnb_a >= 0.60 and p_a > p_h:
-            candidates.append({"category": "Draw No Bet", "pick": "Away DNB", "prob": dnb_a, "odds": round(max(1.45, (1.0 / dnb_a) * 0.93), 2), "safety": dnb_a * 1.20})
+        # 2. Clear Away Favorite (e.g. Ajax, Braga) -> Away Win
+        if p_a >= 0.52 and p_d <= 0.25:
+            return {"category": "1X2", "pick": "Away Win", "prob": round(p_a, 3), "odds": round(max(1.45, (1.0 / p_a) * 0.94), 2)}
 
-        # 3. Double Chance (1X / X2)
-        if dc_x2 >= 0.70 and p_a >= p_h:
-            candidates.append({"category": "Double Chance", "pick": "Draw or Away (X2)", "prob": dc_x2, "odds": round(max(1.32, (1.0 / dc_x2) * 0.93), 2), "safety": dc_x2 * 1.15})
-        if dc_1x >= 0.72 and p_h >= p_a:
-            candidates.append({"category": "Double Chance", "pick": "Home or Draw (1X)", "prob": dc_1x, "odds": round(max(1.30, (1.0 / dc_1x) * 0.93), 2), "safety": dc_1x * 1.15})
+        # 3. High Goal Expectancy -> Over 2.5 Goals
+        if o_25 >= 0.56 and tot_xg >= 2.75:
+            return {"category": "Over/Under Goals", "pick": "Over 2.5 Goals", "prob": round(o_25, 3), "odds": round(max(1.60, (1.0 / o_25) * 0.94), 2)}
 
-        # 4. Under 3.5 Goals
-        if u_35 >= 0.75:
-            candidates.append({"category": "Over/Under Goals", "pick": "Under 3.5 Goals", "prob": u_35, "odds": round(max(1.28, (1.0 / u_35) * 0.93), 2), "safety": u_35 * 1.10})
+        # 4. Competitive Away Advantage -> Away Draw No Bet (DNB)
+        if dnb_a >= 0.62 and p_a > p_h:
+            return {"category": "Draw No Bet", "pick": "Away DNB", "prob": round(dnb_a, 3), "odds": round(max(1.42, (1.0 / dnb_a) * 0.93), 2)}
 
-        # Fallback
-        if not candidates:
-            return {"category": "Double Chance", "pick": "Home or Draw (1X)", "prob": 0.76, "odds": 1.32}
+        # 5. Competitive Home Advantage -> Home Draw No Bet (DNB)
+        if dnb_h >= 0.64 and p_h > p_a:
+            return {"category": "Draw No Bet", "pick": "Home DNB", "prob": round(dnb_h, 3), "odds": round(max(1.38, (1.0 / dnb_h) * 0.93), 2)}
 
-        candidates.sort(key=lambda x: x["safety"], reverse=True)
-        winner = candidates[0]
-        return {
-            "category": winner["category"],
-            "pick": winner["pick"],
-            "prob": round(min(0.92, winner["prob"]), 3),
-            "odds": winner["odds"]
-        }
+        # 6. Tough Away Fixture -> Draw or Away (X2)
+        if dc_x2 >= 0.68 and p_a >= p_h:
+            return {"category": "Double Chance", "pick": "Draw or Away (X2)", "prob": round(dc_x2, 3), "odds": round(max(1.30, (1.0 / dc_x2) * 0.94), 2)}
+
+        # 7. Resilient Home Dog or Solid Host -> Home or Draw (1X)
+        if dc_1x >= 0.70:
+            return {"category": "Double Chance", "pick": "Home or Draw (1X)", "prob": round(dc_1x, 3), "odds": round(max(1.28, (1.0 / dc_1x) * 0.94), 2)}
+
+        # 8. Defensive battle -> Under 3.5 Goals
+        if u_35 >= 0.72:
+            return {"category": "Over/Under Goals", "pick": "Under 3.5 Goals", "prob": round(u_35, 3), "odds": round(max(1.28, (1.0 / u_35) * 0.94), 2)}
+
+        # Clean fallback
+        return {"category": "Double Chance", "pick": "Home or Draw (1X)", "prob": 0.75, "odds": 1.30}
 
     @staticmethod
     def calculate_brier_score(predictions_matrix, actual_outcomes_vector):
