@@ -517,29 +517,41 @@ with main_tabs[1]:
     sample_stake = 100
     est_payout = f"₦{round(sample_stake * accum_odds):,}"
 
-    col_btn, _ = st.columns([2, 1])
+ col_btn, _ = st.columns([2, 1])
     with col_btn:
-        if st.button("⚡ GENERATE SPORTYBET BOOKING CODE FOR THIS SLIP", use_container_width=True):
+        if st.button("⚡ BOOK LIVE TICKET ON SPORTYBET", use_container_width=True):
             if sportybet:
-                with st.spinner("Connecting to SportyBet Server & Booking Ticket..."):
-                    res = sportybet.generate_sportybet_code(legs)
-                    if isinstance(res, tuple):
-                        code = res[0]
-                        err = res[1] if len(res) > 1 else None
-                    else:
-                        code = res
-                        err = None
-
+                with st.spinner("Talking to SportyBet Server & Registering Bet Slip..."):
+                    code, err, booked_games = sportybet.generate_sportybet_code(legs)
                     if code:
-                        st.session_state["cashout_sporty_code"] = code
-                        st.success(f"SportyBet Slip Booked! Code: {code}")
+                        st.session_state["real_sporty_code"] = code
+                        st.session_state["booked_games"] = booked_games
+                        st.success(f"Official SportyBet Ticket Registered: {code}")
                     else:
-                        st.error(f"SportyBet notice: {err or 'Could not complete booking'}")
+                        st.error(f"Booking Error: {err}")
             else:
                 st.error("sportybet.py module missing.")
 
-    if "cashout_sporty_code" in st.session_state:
-        code = st.session_state["cashout_sporty_code"]
+    if "real_sporty_code" in st.session_state:
+        code = st.session_state["real_sporty_code"]
+        booked_games = st.session_state.get("booked_games", [])
+        
+        st.markdown(f"""
+        <div class="sporty-vault-card">
+            <div style="font-size: 0.8rem; font-weight: 800; color: #10B981; letter-spacing: 0.1em; text-transform: uppercase;">
+                Official SportyBet Booking Code ({cashout_tier})
+            </div>
+            <div class="sporty-code-big">{code}</div>
+            <div style="color: #94A3B8; font-size: 0.88rem; font-weight: 600;">
+                Open SportyBet App ➡️ Tap <b>Load Code</b> ➡️ Paste <b>{code}</b>
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
+        
+        if booked_games:
+            with st.expander("📋 View Matches Loaded on this SportyBet Code"):
+                for g in booked_games:
+                    st.write(f"• {g}")
         st.markdown(f"""
         <div class="sporty-vault-card">
             <div style="font-size: 0.8rem; font-weight: 800; color: #10B981; letter-spacing: 0.1em; text-transform: uppercase;">
