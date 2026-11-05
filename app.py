@@ -1,7 +1,7 @@
 """
-👑 QUEEN RINS — Institutional Neural Football Intelligence
-Strict Zero-Trap Filter: Unsafe and high-entropy matches are completely purged.
-Only 100% verified prime banker selections are displayed and compound-stacked.
+👑 QUEEN RINS — Next-Gen Institutional Football Intelligence
+Live ESPN Telemetry, Chaos-Proof Anti-Cut Accumulator Engine,
+Zero-Trap Purge Filter, and Real-Time SportyBet Server Booking.
 """
 
 import streamlit as st
@@ -364,7 +364,7 @@ with st.sidebar:
 
     st.markdown("---")
     st.caption("• **Engine Filter**: Strict Zero-Trap Mode (Active)")
-    st.caption("• **Purge Status**: All high-entropy matches excluded from UI")
+    st.caption("• **SportyBet API**: Direct Server Order Dispatcher")
 
 # ----------------- TOP BRAND HERO -----------------
 st.markdown(f"""
@@ -377,28 +377,25 @@ st.markdown(f"""
     </div>
     <div class="status-capsule">
         <div class="radar-pulse"></div>
-        <span>HIGH-CONVICTION RADAR • {datetime.utcnow().strftime('%H:%M UTC')}</span>
+        <span>LIVE RADAR • {datetime.utcnow().strftime('%H:%M UTC')}</span>
     </div>
 </div>
 """, unsafe_allow_html=True)
 
 # ----------------- STRICT PURGE FILTER -----------------
-# Completely filter out all matches that the engine flags to avoid!
+# Completely purge all matches flagged as traps from the app
 raw_matches = db.get_predictions_filtered(exact_date=today_str)
 approved_bankers = []
 
 for m in raw_matches:
     try:
         d = json.loads(m.get("details_json", "{}"))
-        # If the engine says NOT accumulator eligible, completely hide it from the app!
         if d.get("is_accumulator_eligible", True):
             approved_bankers.append(m)
     except Exception:
         approved_bankers.append(m)
 
-# Sort strictly by confidence
 approved_bankers = sorted(approved_bankers, key=lambda x: float(x["confidence"]), reverse=True)
-
 perf = db.get_performance_metrics()
 
 # ----------------- 4 KPI WIDGETS -----------------
@@ -478,9 +475,7 @@ def render_fixture_card(m):
     st.markdown(card_html, unsafe_allow_html=True)
 
 
-# =============================================================================
 # TAB 1: PRIME BANKER INTELLIGENCE
-# =============================================================================
 with main_tabs[0]:
     st.caption(f"Showing **{len(approved_bankers)}** verified prime bankers for **{today_str}**. All trap matches have been completely purged.")
     if approved_bankers:
@@ -489,11 +484,9 @@ with main_tabs[0]:
             with cols[idx % 2]:
                 render_fixture_card(item)
     else:
-        st.info("No fixtures met the strict prime banker threshold today. The engine rejected all games as too volatile.")
+        st.info("No fixtures met the strict prime banker threshold today.")
 
-# =============================================================================
 # TAB 2: ANTI-CUT ACCUMULATOR (SPORTYBET)
-# =============================================================================
 with main_tabs[1]:
     st.caption("🛡️ Multi-bet compounder strictly built from **approved prime bankers only**. No trap matches allowed.")
 
@@ -517,25 +510,26 @@ with main_tabs[1]:
     sample_stake = 100
     est_payout = f"₦{round(sample_stake * accum_odds):,}"
 
- col_btn, _ = st.columns([2, 1])
+    # REAL SPORTYBET LIVE SERVER INTEGRATION
+    col_btn, _ = st.columns([2, 1])
     with col_btn:
         if st.button("⚡ BOOK LIVE TICKET ON SPORTYBET", use_container_width=True):
             if sportybet:
-                with st.spinner("Talking to SportyBet Server & Registering Bet Slip..."):
+                with st.spinner("Connecting to SportyBet Server & Booking Real Slip..."):
                     code, err, booked_games = sportybet.generate_sportybet_code(legs)
                     if code:
                         st.session_state["real_sporty_code"] = code
                         st.session_state["booked_games"] = booked_games
-                        st.success(f"Official SportyBet Ticket Registered: {code}")
+                        st.success(f"Official SportyBet Code Registered: {code}")
                     else:
-                        st.error(f"Booking Error: {err}")
+                        st.error(f"SportyBet Booking Notice: {err}")
             else:
                 st.error("sportybet.py module missing.")
 
     if "real_sporty_code" in st.session_state:
         code = st.session_state["real_sporty_code"]
         booked_games = st.session_state.get("booked_games", [])
-        
+
         st.markdown(f"""
         <div class="sporty-vault-card">
             <div style="font-size: 0.8rem; font-weight: 800; color: #10B981; letter-spacing: 0.1em; text-transform: uppercase;">
@@ -547,22 +541,11 @@ with main_tabs[1]:
             </div>
         </div>
         """, unsafe_allow_html=True)
-        
+
         if booked_games:
-            with st.expander("📋 View Matches Loaded on this SportyBet Code"):
+            with st.expander("📋 Verified Games On This SportyBet Ticket"):
                 for g in booked_games:
                     st.write(f"• {g}")
-        st.markdown(f"""
-        <div class="sporty-vault-card">
-            <div style="font-size: 0.8rem; font-weight: 800; color: #10B981; letter-spacing: 0.1em; text-transform: uppercase;">
-                Official SportyBet Booking Code ({cashout_tier})
-            </div>
-            <div class="sporty-code-big">{code}</div>
-            <div style="color: #94A3B8; font-size: 0.88rem; font-weight: 600;">
-                Open SportyBet App ➡️ Tap <b>Load Code</b> ➡️ Paste <b>{code}</b>
-            </div>
-        </div>
-        """, unsafe_allow_html=True)
 
     if legs:
         st.markdown(f"""
@@ -601,9 +584,7 @@ with main_tabs[1]:
     else:
         st.info("No games meet the strict safety threshold today.")
 
-# =============================================================================
 # TAB 3: PERFORMANCE
-# =============================================================================
 with main_tabs[2]:
     st.caption("Empirical performance evaluation across settled matches.")
     if perf["market_breakdown"]:
