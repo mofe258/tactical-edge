@@ -1,7 +1,7 @@
 """
 👑 QUEEN RINS — Next-Gen Institutional Football Intelligence
-Live ESPN Score Tracking, Chaos-Proof Asian Handicaps & DNB Markets,
-Automatic Settlement Verification, and ₦100 ➔ ₦70k Slip Generator.
+Live ESPN Telemetry, Chaos-Proof Anti-Cut Accumulator Engine,
+Automatic Trap Blacklisting, and SportyBet One-Tap Slip Generator.
 """
 
 import streamlit as st
@@ -302,7 +302,7 @@ def sync_pipeline(target_date=None):
             "confidence": rec["prob"],
             "est_odds": rec["odds"],
             "tactical_tag": f"{h_xg:.2f} vs {a_xg:.2f} xG",
-            "evidence_quality": "High-Yield",
+            "evidence_quality": match_analysis["evidence_quality"],
             "match_status": status,
             "live_score": score_str,
             "boom_status": boom_status,
@@ -330,7 +330,7 @@ with st.sidebar:
 
     st.markdown("---")
     st.caption("• **Live Feeds**: ESPN Real-Time Scoreboard (Zero Keys Needed)")
-    st.caption("• **Markets**: Straight Wins, 1X/X2, DNB, Over/Under")
+    st.caption("• **Engine**: Anti-Cut Entropy Filter Active")
 
 # ----------------- TOP BRAND HERO -----------------
 st.markdown(f"""
@@ -338,12 +338,12 @@ st.markdown(f"""
     <div>
         <div class="brand-title">QUEEN RINS</div>
         <div style="font-size: 0.82rem; font-weight: 700; color: #38BDF8; letter-spacing: 0.05em; text-transform: uppercase;">
-            Live ESPN Telemetry & Natural Odds Compounder
+            Anti-Cut Accumulator Engine & Trap Blacklist Matrix
         </div>
     </div>
     <div class="status-capsule">
         <div class="radar-pulse"></div>
-        <span>ESPN SCORES LIVE • {datetime.utcnow().strftime('%H:%M UTC')}</span>
+        <span>LIVE ESPN FEEDS • {datetime.utcnow().strftime('%H:%M UTC')}</span>
     </div>
 </div>
 """, unsafe_allow_html=True)
@@ -354,7 +354,7 @@ perf = db.get_performance_metrics()
 # ----------------- NAVIGATION TABS -----------------
 main_tabs = st.tabs([
     "⚡ Daily Intelligence (Live Scores)",
-    "🎯 ₦100 ➔ ₦70k Cashout Hunter",
+    "🎯 Anti-Cut Banker Slips (SportyBet)",
     "📊 Model Performance"
 ])
 
@@ -362,6 +362,8 @@ main_tabs = st.tabs([
 def render_fixture_card(m):
     score_display = m["live_score"] if m["live_score"] != "vs" else "vs"
     is_live = m["match_status"] == 'LIVE'
+    details = json.loads(m.get("details_json", "{}"))
+    is_trap = not details.get("is_accumulator_eligible", True)
 
     badge_html = (
         f'<span style="background: rgba(16, 185, 129, 0.2); color: #10B981; border: 1px solid #10B981; font-size: 0.76rem; font-weight: 800; padding: 4px 10px; border-radius: 8px;">WON (FT)</span>' if m["boom_status"] == 'BOOM' else (
@@ -370,6 +372,11 @@ def render_fixture_card(m):
                 f'<span class="comp-pill">🕒 {m.get("kickoff_time", "18:45 UTC")}</span>'
             )
         )
+    )
+
+    slip_status_pill = (
+        '<span style="background: rgba(239, 68, 68, 0.15); color: #F87171; font-size: 0.70rem; font-weight: 800; padding: 3px 8px; border-radius: 6px;">⚠️ HIGH ENTROPY TRAP (EXCLUDED FROM SLIP)</span>' if is_trap else
+        '<span style="background: rgba(16, 185, 129, 0.15); color: #10B981; font-size: 0.70rem; font-weight: 800; padding: 3px 8px; border-radius: 6px;">🛡️ TIER-1 BANKER (APPROVED)</span>'
     )
 
     card_html = f"""
@@ -385,7 +392,7 @@ def render_fixture_card(m):
         </div>
         <div style="display: flex; gap: 8px; margin-bottom: 14px; flex-wrap: wrap;">
             <span style="background: rgba(255,255,255,0.04); color: #94A3B8; font-size: 0.72rem; font-weight: 700; padding: 3px 8px; border-radius: 6px;">{m.get('tactical_tag', '')}</span>
-            <span style="background: rgba(139, 92, 246, 0.1); color: #C084FC; font-size: 0.72rem; font-weight: 700; padding: 3px 8px; border-radius: 6px;">{m['market_category']}</span>
+            {slip_status_pill}
         </div>
         <div class="prediction-capsule">
             <div>
@@ -404,27 +411,37 @@ def render_fixture_card(m):
 
 # TAB 1: DAILY INTELLIGENCE
 with main_tabs[0]:
-    st.caption("Live, accurate scores direct from ESPN with diverse Home Win, 1X, X2, and DNB selections.")
+    st.caption("Live, accurate scores direct from ESPN with automated Trap Detection flags.")
     cols = st.columns(2)
     for idx, item in enumerate(daily_matches):
         with cols[idx % 2]:
             render_fixture_card(item)
 
-# TAB 2: CASHOUT HUNTER (SPORTYBET)
+# TAB 2: ANTI-CUT BANKER SLIPS (SPORTYBET)
 with main_tabs[1]:
-    st.caption("🚀 Stacking Draw No Bet, Straight Wins, and Double Chance for massive ₦100-to-₦72k cashout multipliers.")
+    st.caption("🛡️ **Anti-Cut Filter Active:** All high-entropy trap matches (like Trabzonspor vs Freiburg) are **strictly banned** from this slip. Only high-conviction bankers with proven dominance are stacked.")
 
     cashout_tier = st.radio(
         "Select Multiplier Package:",
-        ["10.00x Banker Slip", "35.00x Cashout Builder", "100.00x Mega Multi", "720.00x ₦100-to-₦72k Dream Slip"],
+        ["3.00x Banker Tripler", "5.00x Safe Multi", "15.00x Boom Slip", "50.00x Mega Multi"],
         horizontal=True
     )
-    target_multiplier = {"10.00x Banker Slip": 10.0, "35.00x Cashout Builder": 35.0, "100.00x Mega Multi": 100.0, "720.00x ₦100-to-₦72k Dream Slip": 720.0}[cashout_tier]
+    target_multiplier = {"3.00x Banker Tripler": 3.0, "5.00x Safe Multi": 5.0, "15.00x Boom Slip": 14.0, "50.00x Mega Multi": 50.0}[cashout_tier]
+
+    # FILTER OUT ALL TRAPS: Only allow matches marked as accumulator eligible
+    safe_matches = []
+    for r in daily_matches:
+        d = json.loads(r.get("details_json", "{}"))
+        if d.get("is_accumulator_eligible", True):
+            safe_matches.append(r)
+
+    # Sort strictly by reliability
+    safe_matches = sorted(safe_matches, key=lambda x: float(x["confidence"]), reverse=True)
 
     legs = []
     accum_odds = 1.0
 
-    for r in daily_matches:
+    for r in safe_matches:
         accum_odds *= float(r["est_odds"])
         legs.append(r)
         if accum_odds >= target_multiplier:
@@ -475,7 +492,7 @@ with main_tabs[1]:
             <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px dashed rgba(255,255,255,0.1); padding-bottom: 12px; margin-bottom: 12px; flex-wrap: wrap; gap: 12px;">
                 <div>
                     <span style="background: rgba(16, 185, 129, 0.15); color: #10B981; padding: 4px 10px; border-radius: 8px; font-size: 0.76rem; font-weight: 800;">
-                        {cashout_tier} ({len(legs)} Value Legs)
+                        {cashout_tier} ({len(legs)} Banker Legs • Traps Banned)
                     </span>
                     <div style="font-size: 1.6rem; font-weight: 900; color: #FFFFFF; margin-top: 4px;">Compound Odds: @{accum_odds:.2f}</div>
                 </div>
@@ -503,6 +520,8 @@ with main_tabs[1]:
                     </div>
                 </div>
                 """, unsafe_allow_html=True)
+    else:
+        st.info("No games meet the strict Anti-Cut safety threshold today.")
 
 # TAB 3: PERFORMANCE
 with main_tabs[2]:
