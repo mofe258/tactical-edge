@@ -1,7 +1,8 @@
 """
 app.py — TacticalEdge Platform
 Institutional Football Intelligence Dashboard with real-time live match detection,
-kick-off clock tracking, evidence quality scores, and single-day locking.
+kick-off clock tracking, evidence quality scores, UEFA Conference League integration,
+and single-day locking.
 """
 
 import streamlit as st
@@ -260,7 +261,6 @@ def is_match_currently_live(m):
     if status in ['IN_PLAY', 'PAUSED', 'LIVE']:
         return True
 
-    # Real-time clock check: if kickoff has passed and match isn't finished
     if status not in ['FINISHED', 'FT', 'CANCELLED', 'POSTPONED']:
         m_date = m.get("match_date", "")
         k_time = m.get("kickoff_time", "")
@@ -286,9 +286,9 @@ def sync_pipeline():
     count = 0
 
     for m in fixtures:
-        comp_code = m.get("competition", {}).get("code")
-        if not comp_code:
-            continue
+        comp_data = m.get("competition") or {}
+        comp_code = comp_data.get("code") or "ECL"
+        comp_name = comp_data.get("name") or "UEFA Conference League"
 
         match_id = str(m["id"])
         utc_datetime_str = m.get("utcDate", "")
@@ -319,8 +319,8 @@ def sync_pipeline():
         h_crest = m["homeTeam"].get("crest", "")
         a_crest = m["awayTeam"].get("crest", "")
 
-        h_stat = team_stats.get(h_id) or team_stats.get(h_team) or {"att_strength": 1.05, "def_strength": 0.95, "played": 8}
-        a_stat = team_stats.get(a_id) or team_stats.get(a_team) or {"att_strength": 0.95, "def_strength": 1.05, "played": 8}
+        h_stat = team_stats.get(h_id) or team_stats.get(h_team) or {"att_strength": 1.10, "def_strength": 0.95, "played": 8}
+        a_stat = team_stats.get(a_id) or team_stats.get(a_team) or {"att_strength": 0.95, "def_strength": 1.10, "played": 8}
 
         h_games = h_stat.get("played", 8)
         a_games = a_stat.get("played", 8)
@@ -363,7 +363,7 @@ def sync_pipeline():
             "match_date": m_date,
             "kickoff_time": kickoff_time,
             "match_id": match_id,
-            "competition": m["competition"]["name"],
+            "competition": comp_name,
             "home_team": h_team,
             "away_team": a_team,
             "home_crest": h_crest,
@@ -389,7 +389,7 @@ def sync_pipeline():
     return count, None
 
 
-# Auto-refresh scores and statuses on launch
+# Auto-refresh on launch
 existing_today = db.get_predictions_filtered(exact_date=today_str)
 if fetcher.get_api_key():
     last_sync_check = db.get_setting("last_sync_timestamp", "0")
@@ -411,6 +411,7 @@ with st.sidebar:
     st.markdown("---")
     st.markdown("**Data Attribution**")
     st.caption("• Schedules & Standings: football-data.org v4")
+    st.caption("• Competitions: Domestic + UEFA Champions & Conference League")
     st.caption("• Expected Goals (xG): Model-Derived (Dixon-Coles)")
     last_sync = db.get_setting("last_successful_sync", "Never")
     st.caption(f"• Last Success: {last_sync}")
@@ -440,7 +441,6 @@ st.markdown(f"""
 </div>
 """, unsafe_allow_html=True)
 
-# Date Picker (Defaults strictly to TODAY)
 d_col1, d_col2 = st.columns([1.5, 3.5])
 with d_col1:
     selected_date_obj = st.date_input("🗓️ Active Betting Date", value=date.today())
@@ -601,7 +601,7 @@ def render_fixture_card(m, key_prefix):
 with main_tabs[0]:
     f1, f2, f3, f4 = st.columns([2, 1.5, 1.5, 1.5])
     with f1:
-        search_term = st.text_input("Search teams or competitions", placeholder="e.g. Arsenal, Real Madrid, Premier League")
+        search_term = st.text_input("Search teams or competitions", placeholder="e.g. Chelsea, Fiorentina, Conference League")
     with f2:
         leagues = ["All Leagues"] + sorted(list({r["competition"] for r in daily_matches}))
         sel_comp = st.selectbox("Competition Filter", leagues)
@@ -626,22 +626,24 @@ with main_tabs[0]:
             with cols[idx % 2]:
                 render_fixture_card(item, key_prefix=f"daily_{idx}")
     else:
-        st.info(f"No fixtures scheduled for {active_date_str}. If today is an off-day, check the date picker above for the upcoming match day.")
+        st.info(f"No fixtures scheduled for {active_date_str}. Check the date picker above or hit 'Sync Match Schedule' in the sidebar.")
 
 # =============================================================================
 # TAB 2: ELITE MATCHES
 # =============================================================================
 with main_tabs[1]:
-    st.caption(f"Curated powerhouse and Premier League fixtures playing on **{active_date_str}**.")
+    st.caption(f"Curated powerhouse, Conference League, and marquee fixtures playing on **{active_date_str}**.")
     ELITE_KW = [
-        "manchester city", "arsenal", "liverpool", "chelsea", "tottenham", "manchester united",
+        "chelsea", "fiorentina", "betis", "ajax", "gent", "heidenheim", "copenhagen",
+        "panathinaikos", "legia", "vitoria", "rapid", "basel",
+        "manchester city", "arsenal", "liverpool", "tottenham", "manchester united",
         "real madrid", "barcelona", "atletico", "bayern", "dortmund", "leverkusen",
         "inter", "milan", "juventus", "napoli", "paris saint-germain", "psg", "sporting", "benfica"
     ]
     elite_matches = [
         r for r in daily_matches
         if any(k in f"{r['home_team']} {r['away_team']}".lower() for k in ELITE_KW)
-        or r["competition"] in ["Premier League", "UEFA Champions League"]
+        or any(c in r["competition"].lower() for c in ["conference league", "champions league", "premier league"])
     ]
 
     if elite_matches:
@@ -650,7 +652,7 @@ with main_tabs[1]:
             with cols_e[idx % 2]:
                 render_fixture_card(item, key_prefix=f"elite_{idx}")
     else:
-        st.info(f"No marquee powerhouse fixtures playing on {active_date_str}.")
+        st.info(f"No marquee powerhouse or Conference League fixtures playing on {active_date_str}.")
 
 # =============================================================================
 # TAB 3: ACCUMULATOR ANALYSIS
@@ -813,6 +815,7 @@ with main_tabs[5]:
 
     #### 2. Data Sources & Attribution
     * **Schedules, Live Statuses & Standings:** Supplied via official API feeds from `football-data.org v4`.
+    * **Competitions:** Major Domestic Leagues, UEFA Champions League, and UEFA Conference League.
     * **Expected Goals (xG) & Fair Odds:** Model-Derived by TacticalEdge. Bookmaker margins are estimated at $6.0\%$ to derive fair baseline odds.
     * **Evidence Quality Rating:** Dynamically classified based on games played:
       - **Strong Evidence:** $\\ge 8$ league matches played per team.
@@ -820,6 +823,6 @@ with main_tabs[5]:
       - **Limited Evidence:** $< 4$ matches played (heavy Bayesian shrinkage applied).
 
     #### 3. Model Limitations
-    * Predictions reflect statistical strength based on completed league matches and goal rates. They do not account for unannounced tactical rotations or red cards during live matches.
+    * Predictions reflect statistical strength based on completed matches and goal rates. They do not account for unannounced tactical rotations or red cards during live matches.
     * Sports betting inherently involves variance. TacticalEdge calculates mathematical edges, not guaranteed outcomes.
     """)
