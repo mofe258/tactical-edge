@@ -1,186 +1,508 @@
 """
-engine.py — Adaptive Mathematical Prediction Engine for Queen Rins
-Implements Dixon-Coles Bivariate Poisson, Adaptive Loss Feedback,
-Chaos Penalties (Red-card/deadlock buffers), and Multi-Market Allocation.
+👑 QUEEN RINS — Next-Gen Institutional Football Intelligence
+Live ESPN Score Tracking, Chaos-Proof Asian Handicaps & DNB Markets,
+Automatic Settlement Verification, and ₦100 ➔ ₦70k Slip Generator.
 """
 
-import numpy as np
-from scipy.stats import poisson
+import streamlit as st
+import pandas as pd
+from datetime import date, datetime
+import json
+
+import db
+from engine import FootballEngine
+import fetcher
+
+try:
+    import sportybet
+except ImportError:
+    sportybet = None
+
+st.set_page_config(
+    page_title="Queen Rins | Neural Football Intelligence",
+    page_icon="👑",
+    layout="wide",
+    initial_sidebar_state="collapsed"
+)
+
+db.init_db()
+
+# Apple VisionOS Dark OLED Styling
+st.markdown("""
+<style>
+    @import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800;900&family=JetBrains+Mono:wght@500;700&display=swap');
+
+    html, body, [class*="css"] {
+        font-family: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, sans-serif;
+    }
+
+    .stApp {
+        background-color: #05070D;
+        background-image: 
+            radial-gradient(at 0% 0%, rgba(56, 189, 248, 0.12) 0px, transparent 50%),
+            radial-gradient(at 100% 0%, rgba(139, 92, 246, 0.14) 0px, transparent 50%),
+            radial-gradient(at 50% 50%, rgba(16, 185, 129, 0.05) 0px, transparent 55%);
+        background-attachment: fixed;
+        color: #F1F5F9;
+    }
+
+    .hero-container {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 20px 24px;
+        margin-bottom: 24px;
+        background: rgba(15, 23, 42, 0.6);
+        backdrop-filter: blur(24px);
+        border: 1px solid rgba(255, 255, 255, 0.08);
+        border-radius: 20px;
+        box-shadow: 0 20px 40px -15px rgba(0, 0, 0, 0.6);
+        flex-wrap: wrap;
+        gap: 16px;
+    }
+    .brand-title {
+        font-size: 1.85rem;
+        font-weight: 900;
+        background: linear-gradient(135deg, #FFFFFF 30%, #94A3B8 100%);
+        -webkit-background-clip: text;
+        -webkit-text-fill-color: transparent;
+    }
+
+    .status-capsule {
+        display: inline-flex;
+        align-items: center;
+        gap: 10px;
+        background: rgba(16, 24, 39, 0.8);
+        border: 1px solid rgba(255, 255, 255, 0.08);
+        padding: 8px 16px;
+        border-radius: 100px;
+        font-size: 0.78rem;
+        font-weight: 700;
+        color: #E2E8F0;
+    }
+    .radar-pulse {
+        width: 9px;
+        height: 9px;
+        border-radius: 50%;
+        background-color: #10B981;
+        box-shadow: 0 0 12px #10B981;
+    }
+
+    .match-deck-card {
+        background: rgba(15, 23, 42, 0.5);
+        backdrop-filter: blur(20px);
+        border: 1px solid rgba(255, 255, 255, 0.07);
+        border-radius: 20px;
+        padding: 20px 22px;
+        margin-bottom: 16px;
+        transition: all 0.25s ease;
+    }
+    .match-deck-card:hover {
+        border-color: rgba(56, 189, 248, 0.35);
+        transform: translateY(-2px);
+    }
+    .match-top-row {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-bottom: 14px;
+    }
+    .comp-pill {
+        font-size: 0.74rem;
+        font-weight: 700;
+        color: #94A3B8;
+        background: rgba(255, 255, 255, 0.04);
+        padding: 4px 10px;
+        border-radius: 8px;
+    }
+
+    .versus-row {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        margin-bottom: 16px;
+        gap: 8px;
+    }
+    .team-title {
+        font-size: 1.05rem;
+        font-weight: 800;
+        color: #FFFFFF;
+    }
+    .vs-tag {
+        font-size: 0.95rem;
+        font-weight: 900;
+        color: #38BDF8;
+        background: rgba(56, 189, 248, 0.12);
+        padding: 5px 14px;
+        border-radius: 8px;
+        border: 1px solid rgba(56, 189, 248, 0.3);
+    }
+
+    .prediction-capsule {
+        background: linear-gradient(135deg, rgba(14, 165, 233, 0.08) 0%, rgba(139, 92, 246, 0.08) 100%);
+        border: 1px solid rgba(56, 189, 248, 0.25);
+        border-radius: 14px;
+        padding: 14px 16px;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        flex-wrap: wrap;
+        gap: 10px;
+    }
+    .pick-label {
+        font-size: 0.68rem;
+        font-weight: 800;
+        color: #38BDF8;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+    }
+    .pick-name {
+        font-size: 1.1rem;
+        font-weight: 900;
+        color: #FFFFFF;
+    }
+    .prob-chip {
+        background: rgba(56, 189, 248, 0.16);
+        color: #38BDF8;
+        font-weight: 800;
+        font-size: 0.80rem;
+        padding: 5px 10px;
+        border-radius: 8px;
+    }
+    .odds-chip {
+        background: rgba(245, 158, 11, 0.16);
+        color: #FBBF24;
+        font-weight: 900;
+        font-size: 0.90rem;
+        padding: 5px 12px;
+        border-radius: 8px;
+    }
+
+    .sporty-vault-card {
+        background: radial-gradient(circle at 50% 0%, rgba(16, 185, 129, 0.2), rgba(9, 26, 24, 0.85) 75%);
+        border: 2px solid rgba(16, 185, 129, 0.6);
+        border-radius: 20px;
+        padding: 24px;
+        margin: 18px 0;
+        text-align: center;
+    }
+    .sporty-code-big {
+        font-family: 'JetBrains Mono', monospace;
+        font-size: 3.4rem;
+        font-weight: 900;
+        color: #10B981;
+        letter-spacing: 0.15em;
+        margin: 6px 0;
+    }
+
+    .stTabs [data-baseweb="tab-list"] {
+        gap: 8px;
+        background: rgba(15, 23, 42, 0.6);
+        padding: 6px;
+        border-radius: 16px;
+        border: 1px solid rgba(255, 255, 255, 0.06);
+    }
+    .stTabs [data-baseweb="tab"] {
+        color: #94A3B8;
+        font-weight: 700;
+        font-size: 0.85rem;
+        padding: 10px 18px;
+        border-radius: 12px;
+        border: none;
+        background: transparent;
+    }
+    .stTabs [aria-selected="true"] {
+        color: #FFFFFF !important;
+        background: rgba(255, 255, 255, 0.08) !important;
+    }
+
+    .stButton>button {
+        background: linear-gradient(135deg, #0EA5E9 0%, #3B82F6 100%) !important;
+        color: #FFFFFF !important;
+        font-weight: 800 !important;
+        border-radius: 14px !important;
+        padding: 12px 24px !important;
+        border: none !important;
+    }
+</style>
+""", unsafe_allow_html=True)
+
+today_str = date.today().strftime("%Y-%m-%d")
 
 
-class FootballEngine:
-    def __init__(self, league_avg_home=1.45, league_avg_away=1.15, rho=-0.11, shrinkage_weight=6.0):
-        self.league_avg_home = league_avg_home
-        self.league_avg_away = league_avg_away
-        self.rho = rho
-        self.shrinkage_weight = shrinkage_weight
+def sync_pipeline(target_date=None):
+    use_date = target_date or today_str
+    fixtures, _ = fetcher.fetch_upcoming_fixtures(use_date, days_ahead=2)
+    if not fixtures:
+        return 0
 
-    def apply_bayesian_shrinkage(self, raw_rating, sample_size=10):
-        n = max(1, float(sample_size))
-        weight = n / (n + self.shrinkage_weight)
-        shrunk = (weight * float(raw_rating)) + ((1.0 - weight) * 1.0)
-        return float(np.clip(shrunk, 0.50, 1.95))
+    engine = FootballEngine()
+    count = 0
 
-    def calculate_xg(self, home_att, home_def, away_att, away_def, home_games=10, away_games=10):
-        h_att_shrunk = self.apply_bayesian_shrinkage(home_att, home_games)
-        h_def_shrunk = self.apply_bayesian_shrinkage(home_def, home_games)
-        a_att_shrunk = self.apply_bayesian_shrinkage(away_att, away_games)
-        a_def_shrunk = self.apply_bayesian_shrinkage(away_def, away_games)
+    for m in fixtures:
+        match_id = str(m["id"])
+        utc_datetime_str = m.get("utcDate", "")
+        m_date = utc_datetime_str[:10] if utc_datetime_str else use_date
+        kickoff_time = utc_datetime_str[11:16] + " UTC" if len(utc_datetime_str) >= 16 else "18:45 UTC"
 
-        home_xg = h_att_shrunk * a_def_shrunk * self.league_avg_home
-        away_xg = a_att_shrunk * h_def_shrunk * self.league_avg_away
+        h_team = m["homeTeam"]["name"]
+        a_team = m["awayTeam"]["name"]
 
-        # Apply chaos dampener to prevent overconfidence
-        home_xg = float(np.clip(home_xg, 0.40, 2.90))
-        away_xg = float(np.clip(away_xg, 0.30, 2.40))
+        custom = m.get("_custom_ratings", {})
+        h_att = custom.get("h_att", 1.25)
+        h_def = custom.get("h_def", 1.00)
+        a_att = custom.get("a_att", 1.10)
+        a_def = custom.get("a_def", 1.15)
 
-        return float(round(home_xg, 3)), float(round(away_xg, 3))
+        h_xg, a_xg = engine.calculate_xg(h_att, h_def, a_att, a_def)
+        match_analysis = engine.predict_full_match(h_xg, a_xg, h_team, a_team)
+        rec = match_analysis["recommendation"]
 
-    def _tau_correction(self, h, a, lmbda, mu):
-        if h == 0 and a == 0:
-            return 1.0 - (lmbda * mu * self.rho)
-        elif h == 0 and a == 1:
-            return 1.0 + (lmbda * self.rho)
-        elif h == 1 and a == 0:
-            return 1.0 + (mu * self.rho)
-        elif h == 1 and a == 1:
-            return 1.0 - self.rho
-        return 1.0
+        # Parse live/final scores from ESPN
+        score_data = m.get("score", {}).get("fullTime", {})
+        h_goals = score_data.get("home")
+        a_goals = score_data.get("away")
+        status = m.get("status", "SCHEDULED")
 
-    def compute_score_matrix(self, home_xg, away_xg, max_goals=8):
-        matrix = np.zeros((max_goals, max_goals))
-        for h in range(max_goals):
-            for a in range(max_goals):
-                p_ind = poisson.pmf(h, home_xg) * poisson.pmf(a, away_xg)
-                tau = self._tau_correction(h, a, home_xg, away_xg)
-                matrix[h][a] = max(0.0, p_ind * tau)
+        score_str = f"{h_goals} - {a_goals}" if (h_goals is not None and a_goals is not None) else "vs"
 
-        m_sum = np.sum(matrix)
-        if m_sum > 0:
-            matrix = matrix / m_sum
-        return matrix
+        # Automatic verification
+        boom_status = "PENDING"
+        if status in ['FINISHED', 'FT'] and h_goals is not None and a_goals is not None:
+            pick = rec["pick"]
+            tot = h_goals + a_goals
+            if "Away (+1.5)" in pick:
+                boom_status = "BOOM" if (a_goals + 1.5) > h_goals else "LOST"
+            elif "Home (+1.5)" in pick:
+                boom_status = "BOOM" if (h_goals + 1.5) > a_goals else "LOST"
+            elif "Away DNB" in pick:
+                boom_status = "BOOM" if a_goals > h_goals else ("VOID" if a_goals == h_goals else "LOST")
+            elif "Home DNB" in pick:
+                boom_status = "BOOM" if h_goals > a_goals else ("VOID" if a_goals == h_goals else "LOST")
+            elif "Draw or Away" in pick or "X2" in pick:
+                boom_status = "BOOM" if a_goals >= h_goals else "LOST"
+            elif "Home or Draw" in pick or "1X" in pick:
+                boom_status = "BOOM" if h_goals >= a_goals else "LOST"
+            elif "Under 3.5" in pick:
+                boom_status = "BOOM" if tot < 3.5 else "LOST"
+            else:
+                boom_status = "BOOM" if h_goals > a_goals else "LOST"
 
-    def predict_full_match(self, home_xg, away_xg, home_team="Home", away_team="Away", home_games=10, away_games=10):
-        matrix = self.compute_score_matrix(home_xg, away_xg)
-        max_goals = matrix.shape[0]
+        db.save_or_update_prediction({
+            "match_date": m_date,
+            "kickoff_time": kickoff_time,
+            "match_id": match_id,
+            "competition": "UEFA Conference League",
+            "home_team": h_team,
+            "away_team": a_team,
+            "home_crest": "",
+            "away_crest": "",
+            "market_category": rec["category"],
+            "market_pick": rec["pick"],
+            "confidence": rec["prob"],
+            "est_odds": rec["odds"],
+            "tactical_tag": f"{h_xg:.2f} vs {a_xg:.2f} xG",
+            "evidence_quality": "Chaos-Proof",
+            "match_status": status,
+            "live_score": score_str,
+            "boom_status": boom_status,
+            "full_time_home": h_goals,
+            "full_time_away": a_goals,
+            "prob_home": match_analysis["prob_home"],
+            "prob_draw": match_analysis["prob_draw"],
+            "prob_away": match_analysis["prob_away"],
+            "details": match_analysis
+        })
+        count += 1
 
-        # 1X2 Probabilities
-        prob_home = float(np.sum(np.tril(matrix, -1)))
-        prob_draw = float(np.sum(np.diag(matrix)))
-        prob_away = float(np.sum(np.triu(matrix, 1)))
+    return count
 
-        total_1x2 = prob_home + prob_draw + prob_away
-        if total_1x2 > 0:
-            prob_home /= total_1x2
-            prob_draw /= total_1x2
-            prob_away /= total_1x2
 
-        # Draw No Bet (DNB) — Refunds stake on Draw (Crucial for slip survival)
-        dnb_home = prob_home / (prob_home + prob_away) if (prob_home + prob_away) > 0 else 0.5
-        dnb_away = prob_away / (prob_home + prob_away) if (prob_home + prob_away) > 0 else 0.5
+# Auto-refresh scores on launch
+sync_pipeline(today_str)
 
-        # Double Chance
-        dc_1x = min(0.92, prob_home + prob_draw)
-        dc_x2 = min(0.90, prob_away + prob_draw)
+# ----------------- SIDEBAR -----------------
+with st.sidebar:
+    st.markdown("### 👑 Live Score & Engine Matrix")
+    if st.button("⚡ Sync Live ESPN Scores & Results", use_container_width=True):
+        count = sync_pipeline(today_str)
+        st.success(f"Updated live scores for {count} fixtures!")
+        st.rerun()
 
-        # Over / Under
-        ou = {}
-        for line in [1.5, 2.5, 3.5]:
-            u_prob = float(np.sum([matrix[h][a] for h in range(max_goals) for a in range(max_goals) if h + a < line]))
-            ou[f"Under {line}"] = u_prob
-            ou[f"Over {line}"] = 1.0 - u_prob
+    st.markdown("---")
+    st.caption("• **Live Feeds**: ESPN Real-Time Scoreboard (Zero Keys Needed)")
+    st.caption("• **Engine**: Asian Handicap + DNB Protection (Anti-GG Traps)")
 
-        # Both Teams to Score (BTTS)
-        btts_yes = float(np.sum(matrix[1:, 1:]))
-        btts_no = 1.0 - btts_yes
+# ----------------- TOP BRAND HERO -----------------
+st.markdown(f"""
+<div class="hero-container">
+    <div>
+        <div class="brand-title">QUEEN RINS</div>
+        <div style="font-size: 0.82rem; font-weight: 700; color: #38BDF8; letter-spacing: 0.05em; text-transform: uppercase;">
+            Live ESPN Telemetry & Chaos-Proof Odds Compounder
+        </div>
+    </div>
+    <div class="status-capsule">
+        <div class="radar-pulse"></div>
+        <span>ESPN SCORES LIVE • {datetime.utcnow().strftime('%H:%M UTC')}</span>
+    </div>
+</div>
+""", unsafe_allow_html=True)
 
-        # Combos
-        h_and_o15 = float(np.sum([matrix[h][a] for h in range(max_goals) for a in range(max_goals) if h > a and (h + a) >= 2]))
-        a_and_o15 = float(np.sum([matrix[h][a] for h in range(max_goals) for a in range(max_goals) if a > h and (h + a) >= 2]))
+daily_matches = db.get_predictions_filtered(exact_date=today_str)
+perf = db.get_performance_metrics()
 
-        # High-Value Multi-Market Evaluator
-        rec = self._allocate_high_value_market(
-            prob_home, prob_draw, prob_away, dnb_home, dnb_away,
-            dc_1x, dc_x2, ou, btts_yes, h_and_o15, a_and_o15, home_xg, away_xg
+# ----------------- NAVIGATION TABS -----------------
+main_tabs = st.tabs([
+    "⚡ Daily Intelligence (Live Scores)",
+    "🎯 ₦100 ➔ ₦70k Cashout Hunter",
+    "📊 Model Performance"
+])
+
+
+def render_fixture_card(m):
+    score_display = m["live_score"] if m["live_score"] != "vs" else "vs"
+    is_finished = m["match_status"] in ['FINISHED', 'FT']
+    is_live = m["match_status"] == 'LIVE'
+
+    badge_html = (
+        f'<span style="background: rgba(16, 185, 129, 0.2); color: #10B981; border: 1px solid #10B981; font-size: 0.76rem; font-weight: 800; padding: 4px 10px; border-radius: 8px;">WON (FT)</span>' if m["boom_status"] == 'BOOM' else (
+            f'<span style="background: rgba(239, 68, 68, 0.2); color: #F87171; border: 1px solid #EF4444; font-size: 0.76rem; font-weight: 800; padding: 4px 10px; border-radius: 8px;">LOST (FT)</span>' if m["boom_status"] == 'LOST' else (
+                f'<span style="background: rgba(239, 68, 68, 0.2); color: #F87171; border: 1px solid #EF4444; font-size: 0.76rem; font-weight: 800; padding: 4px 10px; border-radius: 8px;">🔴 LIVE {score_display}</span>' if is_live else
+                f'<span class="comp-pill">🕒 {m.get("kickoff_time", "18:45 UTC")}</span>'
+            )
         )
+    )
 
-        reliability = round((rec["prob"] * 100.0) * (1.0 - (prob_draw * 0.3)), 1)
+    card_html = f"""
+    <div class="match-deck-card">
+        <div class="match-top-row">
+            <span class="comp-pill">{m['competition']}</span>
+            {badge_html}
+        </div>
+        <div class="versus-row">
+            <span class="team-title">{m['home_team']}</span>
+            <span class="vs-tag">{score_display}</span>
+            <span class="team-title" style="text-align: right;">{m['away_team']}</span>
+        </div>
+        <div style="display: flex; gap: 8px; margin-bottom: 14px; flex-wrap: wrap;">
+            <span style="background: rgba(255,255,255,0.04); color: #94A3B8; font-size: 0.72rem; font-weight: 700; padding: 3px 8px; border-radius: 6px;">{m.get('tactical_tag', '')}</span>
+            <span style="background: rgba(139, 92, 246, 0.1); color: #C084FC; font-size: 0.72rem; font-weight: 700; padding: 3px 8px; border-radius: 6px;">{m['market_category']}</span>
+        </div>
+        <div class="prediction-capsule">
+            <div>
+                <div class="pick-label">Optimal Chaos-Proof Allocation</div>
+                <div class="pick-name">⚡ {m['market_pick']}</div>
+            </div>
+            <div style="display: flex; gap: 8px; align-items: center;">
+                <span class="prob-chip">{m['confidence']*100:.1f}% Model</span>
+                <span class="odds-chip">@{m['est_odds']:.2f}</span>
+            </div>
+        </div>
+    </div>
+    """
+    st.markdown(card_html, unsafe_allow_html=True)
 
-        explanation = {
-            "summary": f"xG Expectancy: {home_team} ({home_xg:.2f}) vs {away_team} ({away_xg:.2f}). Total {home_xg+away_xg:.2f} goals.",
-            "supporting": f"Selected '{rec['pick']}' to maximize risk-adjusted value while guarding against 0-0/1-0 deadlock traps.",
-            "risk": f"Draw density modeled at {prob_draw*100:.1f}%. DNB/DC cushions applied."
-        }
 
-        return {
-            "home_xg": home_xg,
-            "away_xg": away_xg,
-            "prob_home": prob_home,
-            "prob_draw": prob_draw,
-            "prob_away": prob_away,
-            "evidence_quality": "High-Yield Calibration",
-            "reliability_score": reliability,
-            "recommendation": rec,
-            "explanation": explanation
-        }
+# TAB 1: DAILY INTELLIGENCE
+with main_tabs[0]:
+    st.caption("Live, accurate scores direct from ESPN with chaos-proof Asian Handicap and Draw No Bet selections.")
+    cols = st.columns(2)
+    for idx, item in enumerate(daily_matches):
+        with cols[idx % 2]:
+            render_fixture_card(item)
 
-    def _allocate_high_value_market(self, p_h, p_d, p_a, dnb_h, dnb_a, dc_1x, dc_x2, ou, btts, h_o15, a_o15, h_xg, a_xg):
-        """
-        DIVERSIFIED MARKET ALLOCATION:
-        Bans repetitive 1.18 Over 1.5 clustering.
-        Prioritizes Draw No Bet (DNB), Double Chance, and Meaty Value Markets (@1.40 - @2.10).
-        """
-        candidates = []
-        tot_xg = h_xg + a_xg
+# TAB 2: CASHOUT HUNTER (SPORTYBET)
+with main_tabs[1]:
+    st.caption("🚀 The exact accumulator strategy your friend used: Stacking Draw No Bet, Asian Handicap (+1.5), and Double Chance for massive ₦100-to-₦72k cashout multipliers.")
 
-        # 1. Clear Home Dominance -> Straight Home Win (@1.45 - @1.90)
-        if p_h >= 0.58 and p_d <= 0.24:
-            odds = round(max(1.45, (1.0 / p_h) * 0.93), 2)
-            candidates.append({"category": "1X2", "pick": "Home Win", "prob": p_h, "odds": odds, "edge": p_h * 1.25})
+    cashout_tier = st.radio(
+        "Select Multiplier Package:",
+        ["10.00x Banker Slip", "35.00x Cashout Builder", "100.00x Mega Multi", "720.00x ₦100-to-₦72k Dream Slip"],
+        horizontal=True
+    )
+    target_multiplier = {"10.00x Banker Slip": 10.0, "35.00x Cashout Builder": 35.0, "100.00x Mega Multi": 100.0, "720.00x ₦100-to-₦72k Dream Slip": 720.0}[cashout_tier]
 
-        # 2. Draw-Prone Home Favorite -> Home Draw No Bet (DNB)
-        if dnb_h >= 0.68 and p_h > p_a:
-            odds = round(max(1.35, (1.0 / dnb_h) * 0.92), 2)
-            candidates.append({"category": "Draw No Bet", "pick": "Home DNB", "prob": dnb_h, "odds": odds, "edge": dnb_h * 1.20})
+    legs = []
+    accum_odds = 1.0
 
-        # 3. High-Scoring Open Game -> Both Teams to Score (BTTS) or Over 2.5
-        if btts >= 0.58 and h_xg >= 1.25 and a_xg >= 1.20:
-            odds = round(max(1.65, (1.0 / btts) * 0.93), 2)
-            candidates.append({"category": "BTTS", "pick": "GG (Both Teams Score)", "prob": btts, "odds": odds, "edge": btts * 1.18})
+    for r in daily_matches:
+        accum_odds *= float(r["est_odds"])
+        legs.append(r)
+        if accum_odds >= target_multiplier:
+            break
 
-        # 4. Dangerous Away Favorite -> Away Draw No Bet or X2
-        if dnb_a >= 0.64 and p_a > p_h:
-            odds = round(max(1.40, (1.0 / dnb_a) * 0.92), 2)
-            candidates.append({"category": "Draw No Bet", "pick": "Away DNB", "prob": dnb_a, "odds": odds, "edge": dnb_a * 1.15})
+    accum_odds = round(accum_odds, 2)
+    sample_stake = 100
+    est_payout = f"₦{round(sample_stake * accum_odds):,}"
 
-        # 5. Over 2.5 Goals (Only when xG is genuinely explosive)
-        if ou["Over 2.5"] >= 0.56 and tot_xg >= 2.90:
-            odds = round(max(1.70, (1.0 / ou["Over 2.5"]) * 0.93), 2)
-            candidates.append({"category": "Over/Under Goals", "pick": "Over 2.5 Goals", "prob": ou["Over 2.5"], "odds": odds, "edge": ou["Over 2.5"] * 1.12})
+    col_btn, _ = st.columns([2, 1])
+    with col_btn:
+        if st.button("⚡ GENERATE SPORTYBET BOOKING CODE FOR THIS SLIP", use_container_width=True):
+            if sportybet:
+                with st.spinner("Connecting to SportyBet Server & Booking Ticket..."):
+                    code, err = sportybet.generate_sportybet_code(legs)
+                    if code:
+                        st.session_state["cashout_sporty_code"] = code
+                    else:
+                        st.error(f"SportyBet notice: {err}")
+            else:
+                st.error("sportybet.py module missing.")
 
-        # 6. Double Chance 1X or X2 for high-tension fixtures
-        if dc_1x >= 0.72 and p_h >= p_a:
-            odds = round(max(1.28, (1.0 / dc_1x) * 0.93), 2)
-            candidates.append({"category": "Double Chance", "pick": "Home or Draw (1X)", "prob": dc_1x, "odds": odds, "edge": dc_1x * 1.10})
-        if dc_x2 >= 0.70 and p_a > p_h:
-            odds = round(max(1.30, (1.0 / dc_x2) * 0.93), 2)
-            candidates.append({"category": "Double Chance", "pick": "Draw or Away (X2)", "prob": dc_x2, "odds": odds, "edge": dc_x2 * 1.08})
+    if "cashout_sporty_code" in st.session_state:
+        code = st.session_state["cashout_sporty_code"]
+        st.markdown(f"""
+        <div class="sporty-vault-card">
+            <div style="font-size: 0.8rem; font-weight: 800; color: #10B981; letter-spacing: 0.1em; text-transform: uppercase;">
+                Official SportyBet Booking Code ({cashout_tier})
+            </div>
+            <div class="sporty-code-big">{code}</div>
+            <div style="color: #94A3B8; font-size: 0.88rem; font-weight: 600;">
+                Open SportyBet App ➡️ Tap <b>Load Code</b> ➡️ Paste <b>{code}</b>
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
 
-        # 7. Under 3.5 Goals (Safe buffer for tight defensive games)
-        if ou["Under 3.5"] >= 0.72 and tot_xg < 2.30:
-            odds = round(max(1.30, (1.0 / ou["Under 3.5"]) * 0.93), 2)
-            candidates.append({"category": "Over/Under Goals", "pick": "Under 3.5 Goals", "prob": ou["Under 3.5"], "odds": odds, "edge": ou["Under 3.5"] * 1.06})
+    if legs:
+        st.markdown(f"""
+        <div style="background: rgba(15, 23, 42, 0.55); border: 1px solid rgba(255,255,255,0.08); border-radius: 18px; padding: 20px; margin: 16px 0;">
+            <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px dashed rgba(255,255,255,0.1); padding-bottom: 12px; margin-bottom: 12px; flex-wrap: wrap; gap: 12px;">
+                <div>
+                    <span style="background: rgba(16, 185, 129, 0.15); color: #10B981; padding: 4px 10px; border-radius: 8px; font-size: 0.76rem; font-weight: 800;">
+                        {cashout_tier} ({len(legs)} Value Legs)
+                    </span>
+                    <div style="font-size: 1.6rem; font-weight: 900; color: #FFFFFF; margin-top: 4px;">Compound Odds: @{accum_odds:.2f}</div>
+                </div>
+                <div>
+                    <div style="font-size: 0.72rem; color: #94A3B8; text-transform: uppercase; font-weight: 700;">Projected Payout (₦{sample_stake:,} Stake)</div>
+                    <div style="font-size: 1.8rem; font-weight: 900; color: #10B981;">{est_payout}</div>
+                </div>
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
 
-        # Fallback ONLY if nothing else fits (strictly avoids identical 1.18 odds)
-        if not candidates:
-            return {"category": "Double Chance", "pick": "Home or Draw (1X)", "prob": 0.75, "odds": 1.32}
+        t_cols = st.columns(2)
+        for idx, leg in enumerate(legs):
+            with t_cols[idx % 2]:
+                st.markdown(f"""
+                <div style="background: rgba(15, 23, 42, 0.4); border: 1px solid rgba(255,255,255,0.06); border-radius: 14px; padding: 14px 16px; margin-bottom: 10px; display: flex; justify-content: space-between; align-items: center;">
+                    <div>
+                        <div style="font-size: 0.70rem; color: #64748B; font-weight: 700;">{leg['competition']} • {leg['kickoff_time']}</div>
+                        <div style="font-weight: 800; color: #FFFFFF; font-size: 0.95rem; margin-top: 2px;">{leg['home_team']} vs {leg['away_team']}</div>
+                        <div style="color: #38BDF8; font-weight: 800; font-size: 0.88rem; margin-top: 3px;">⚡ {leg['market_pick']}</div>
+                    </div>
+                    <div style="text-align: right;">
+                        <span class="prob-chip">{leg['confidence']*100:.1f}%</span>
+                        <div style="font-weight: 900; color: #FBBF24; font-size: 0.98rem; margin-top: 5px;">@{leg['est_odds']:.2f}</div>
+                    </div>
+                </div>
+                """, unsafe_allow_html=True)
 
-        # Select highest edge-to-risk candidate
-        candidates.sort(key=lambda x: x["edge"], reverse=True)
-        winner = candidates[0]
-        return {
-            "category": winner["category"],
-            "pick": winner["pick"],
-            "prob": round(min(0.92, winner["prob"]), 3),
-            "odds": winner["odds"]
-        }
+# TAB 3: PERFORMANCE
+with main_tabs[2]:
+    st.caption("Empirical performance evaluation across settled matches.")
+    if perf["market_breakdown"]:
+        m_rows = [{"Market": k, "Settled": v["total"], "Won": v["won"], "Accuracy": f"{v['accuracy']}%"} for k, v in perf["market_breakdown"].items()]
+        st.dataframe(pd.DataFrame(m_rows), hide_index=True, use_container_width=True)
+    else:
+        st.info("Settled matches update automatically via ESPN feeds.")
