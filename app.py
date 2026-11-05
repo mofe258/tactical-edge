@@ -1,18 +1,18 @@
 """
 app.py — TacticalEdge Platform
-Institutional Football Intelligence Dashboard with real-time live match detection,
-kick-off clock tracking, evidence quality scores, full UEFA Conference League suite,
-and single-day locking.
+Institutional Football Intelligence Dashboard with UEFA Conference League,
+Accumulator Builder, and 1-Click Live SportyBet Booking Code Generator.
 """
 
 import streamlit as st
 import pandas as pd
-from datetime import date, datetime, timedelta
+from datetime import date, datetime
 import json
 
 import db
 from engine import FootballEngine
 import fetcher
+import sportybet
 
 # ----------------- PAGE CONFIG -----------------
 st.set_page_config(
@@ -120,21 +120,12 @@ st.markdown("""
     .match-card:hover {
         border-color: #2D3A54;
     }
-    .match-card-boom {
-        background: #091A18 !important;
-        border: 1px solid #10B981 !important;
-    }
 
     .team-row {
         display: flex;
         align-items: center;
         gap: 12px;
         margin-bottom: 8px;
-    }
-    .team-crest {
-        width: 24px;
-        height: 24px;
-        object-fit: contain;
     }
     .team-name {
         font-size: 1.05rem;
@@ -151,11 +142,6 @@ st.markdown("""
     .badge-scheduled {
         background: #182238;
         color: #94A3B8;
-    }
-    .badge-boom {
-        background: rgba(16, 185, 129, 0.15);
-        color: #10B981;
-        border: 1px solid rgba(16, 185, 129, 0.3);
     }
     .badge-evidence {
         font-size: 0.68rem;
@@ -199,6 +185,14 @@ st.markdown("""
         border-radius: 6px;
         font-size: 0.75rem;
         font-weight: 700;
+    }
+
+    .sporty-banner {
+        background: linear-gradient(135deg, #0D2618 0%, #101626 100%);
+        border: 1px solid #10B981;
+        border-radius: 10px;
+        padding: 16px 20px;
+        margin-bottom: 16px;
     }
 
     .stTabs [data-baseweb="tab-list"] {
@@ -329,7 +323,6 @@ def sync_pipeline(target_date=None):
     return count, None
 
 
-# Auto-load immediately if today has 0 or fewer than 5 matches
 today_matches_check = db.get_predictions_filtered(exact_date=today_str)
 if len(today_matches_check) < 10:
     sync_pipeline(today_str)
@@ -350,18 +343,18 @@ with st.sidebar:
 
     st.markdown("---")
     st.caption("• Competitions: UEFA Conference League, Champions League, Major Domestic")
-    st.caption("• Model: Dixon-Coles Bivariate Poisson (xG Adjusted)")
+    st.caption("• SportyBet Auto-Booking: Enabled (NG)")
 
 # ----------------- TOP NAVBAR & DATE LOCK -----------------
 st.markdown(f"""
 <div class="top-bar">
     <div>
         <div class="brand-title">TACTICALEDGE</div>
-        <div class="brand-subtitle">Football Intelligence & Calibrated Prediction Platform</div>
+        <div class="brand-subtitle">Football Intelligence & Instant SportyBet Booking Platform</div>
     </div>
     <div class="freshness-pill">
         <div class="status-dot-green"></div>
-        <span>UEFA Conference League Active • {datetime.utcnow().strftime('%H:%M UTC')}</span>
+        <span>SportyBet Engine Ready • {datetime.utcnow().strftime('%H:%M UTC')}</span>
     </div>
 </div>
 """, unsafe_allow_html=True)
@@ -372,7 +365,7 @@ with d_col1:
     active_date_str = selected_date_obj.strftime("%Y-%m-%d")
 
 with d_col2:
-    st.caption(f"🟢 **Showing Fixtures For {active_date_str}**. Stacking and slips locked strictly to this date.")
+    st.caption(f"🟢 **Showing Fixtures For {active_date_str}**. Stacking and SportyBet slips locked strictly to today's games.")
 
 daily_matches = db.get_predictions_filtered(exact_date=active_date_str)
 if not daily_matches:
@@ -422,8 +415,8 @@ st.markdown("<br>", unsafe_allow_html=True)
 # ----------------- TABS -----------------
 main_tabs = st.tabs([
     "Daily Intelligence",
+    "Sure Bets & SportyBet Codes",
     "Elite Matches",
-    "Accumulator Analysis",
     "Model Performance",
     "Match Analytics"
 ])
@@ -486,23 +479,27 @@ with main_tabs[0]:
     else:
         st.info(f"No fixtures found for {active_date_str}.")
 
-# TAB 2: ELITE MATCHES
+# TAB 2: SURE BETS & INSTANT SPORTYBET CODES
 with main_tabs[1]:
-    st.caption("Top marquee and Conference League showdowns.")
-    cols_e = st.columns(2)
-    for idx, item in enumerate(daily_matches):
-        with cols_e[idx % 2]:
-            render_fixture_card(item)
+    st.markdown("### 📲 Sure Bets & Instant SportyBet Booking Code")
+    st.caption("Select your target odds tier below, then click **Generate Working SportyBet Code** to book the slip directly on SportyBet NG.")
 
-# TAB 3: ACCUMULATOR ANALYSIS
-with main_tabs[2]:
-    st.caption(f"Multi-bet compounder strictly stacking matches playing on **{active_date_str}**.")
-    tier = st.radio("Target Tier:", ["3.00x Odds", "5.00x Odds", "10.00x Odds", "15.00x Boom Slip", "50.00x Multi"], horizontal=True)
-    t_val = {"3.00x Odds": 3.0, "5.00x Odds": 5.0, "10.00x Odds": 10.0, "15.00x Boom Slip": 14.5, "50.00x Multi": 50.0}[tier]
+    tier = st.radio(
+        "Select Target Odds Tier:",
+        ["3.00x Odds", "5.00x Odds", "10.00x Odds", "15.00x Boom Slip", "50.00x Multi"],
+        index=1,
+        horizontal=True
+    )
+    t_val = {
+        "3.00x Odds": 3.0,
+        "5.00x Odds": 5.0,
+        "10.00x Odds": 10.0,
+        "15.00x Boom Slip": 14.5,
+        "50.00x Multi": 50.0
+    }[tier]
 
     legs = []
     accum_odds = 1.0
-
     for r in daily_matches:
         accum_odds *= float(r["est_odds"])
         legs.append(r)
@@ -513,15 +510,61 @@ with main_tabs[2]:
     sample_stake = 2000
     est_ret = f"₦{round(sample_stake * accum_odds):,}"
 
+    # SportyBet Booking Code Generator Button
+    btn_col1, btn_col2 = st.columns([1.6, 2.4])
+    with btn_col1:
+        gen_clicked = st.button(f"🚀 Generate Working SportyBet Code ({tier})", type="primary", use_container_width=True)
+
+    if gen_clicked:
+        with st.spinner("Connecting to SportyBet Nigeria & booking your selections..."):
+            code, sporty_legs, real_odds, err_msg = sportybet.generate_sportybet_code(legs, target_odds=t_val)
+            if code:
+                st.session_state["last_sporty_code"] = code
+                st.session_state["last_sporty_legs"] = sporty_legs
+                st.session_state["last_sporty_odds"] = real_odds
+                st.session_state["last_sporty_tier"] = tier
+                st.session_state["last_sporty_err"] = None
+            else:
+                st.session_state["last_sporty_code"] = None
+                st.session_state["last_sporty_err"] = err_msg
+
+    if st.session_state.get("last_sporty_err"):
+        st.error(st.session_state["last_sporty_err"])
+
+    if st.session_state.get("last_sporty_code"):
+        s_code = st.session_state["last_sporty_code"]
+        s_odds = st.session_state["last_sporty_odds"]
+        s_legs = st.session_state["last_sporty_legs"]
+        s_tier = st.session_state.get("last_sporty_tier", tier)
+
+        st.markdown(f"""
+        <div class="sporty-banner">
+            <div style="font-size: 0.78rem; color: #10B981; font-weight: 700; text-transform: uppercase;">
+                ✅ Live SportyBet Nigeria Booking Code Ready ({s_tier} • {len(s_legs)} Matches • @{s_odds} Real Odds)
+            </div>
+            <div style="font-size: 0.85rem; color: #CBD5E1; margin-top: 4px;">
+                Click the copy icon on the right side of the box below, open your <b>SportyBet App</b>, paste the code into Betslip, and place your bet!
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
+
+        # Streamlit code block provides built-in 1-click Copy button
+        st.code(s_code, language=None)
+
+        with st.expander(f"View Exact Booked SportyBet Selections ({len(s_legs)} Legs)", expanded=True):
+            st.dataframe(pd.DataFrame(s_legs), hide_index=True, use_container_width=True)
+
+    st.markdown("---")
+    st.markdown("##### Model Projected Slip Preview")
     if legs:
         st.markdown(f"""
         <div style="background: #101626; border: 1px solid #1A2234; border-radius: 10px; padding: 18px; margin-bottom: 16px;">
-            <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px dashed #1A2234; padding-bottom: 12px; margin-bottom: 12px; flex-wrap: wrap;">
+            <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap;">
                 <div>
                     <span style="background: rgba(16, 185, 129, 0.15); color: #10B981; padding: 3px 8px; border-radius: 4px; font-size: 0.75rem; font-weight: 700;">
-                        {tier} Package ({len(legs)} Legs • {active_date_str})
+                        {tier} Model Preview ({len(legs)} Legs • {active_date_str})
                     </span>
-                    <div style="font-size: 1.35rem; font-weight: 800; color: #FFFFFF; margin-top: 4px;">Compound Odds: {accum_odds:.2f}</div>
+                    <div style="font-size: 1.35rem; font-weight: 800; color: #FFFFFF; margin-top: 4px;">Model Compound Odds: {accum_odds:.2f}</div>
                 </div>
                 <div>
                     <div style="font-size: 0.72rem; color: #64748B; text-transform: uppercase;">Estimated Payout (₦{sample_stake:,} Stake)</div>
@@ -547,6 +590,14 @@ with main_tabs[2]:
                     </div>
                 </div>
                 """, unsafe_allow_html=True)
+
+# TAB 3: ELITE MATCHES
+with main_tabs[2]:
+    st.caption("Top marquee and Conference League showdowns.")
+    cols_e = st.columns(2)
+    for idx, item in enumerate(daily_matches):
+        with cols_e[idx % 2]:
+            render_fixture_card(item)
 
 # TAB 4: PERFORMANCE
 with main_tabs[3]:
