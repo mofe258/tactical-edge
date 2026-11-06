@@ -1,7 +1,7 @@
 """
 👑 QUEEN RINS — Institutional Neural Football Intelligence
-Live SportyBet Board Sync, Anti-Cut Accumulator Engine,
-Automatic Ghost-Fixture Purge, and Official SportyBet Ticket Booking.
+Live ESPN Telemetry, Chaos-Proof Anti-Cut Accumulator Engine,
+Zero-Trap Purge Filter, Persistent SportyBet Code Vault, and Live Auto-Pruning.
 """
 
 import streamlit as st
@@ -355,7 +355,7 @@ def sync_pipeline(target_date=None, force_clean=False):
     return count
 
 
-# Auto-load active SportyBet board
+# Auto-cleanse ghost fixtures on boot
 active_check = db.get_predictions_filtered(exact_date=today_str)
 if not active_check or any("Everton" in m["home_team"] for m in active_check):
     sync_pipeline(today_str, force_clean=True)
@@ -367,6 +367,11 @@ with st.sidebar:
     if st.button("🗑️ PURGE STALE FIXTURES & SYNC SPORTYBET", use_container_width=True):
         count = sync_pipeline(today_str, force_clean=True)
         st.success(f"Purged ghost games! Synced {count} active matches directly from SportyBet.")
+        st.rerun()
+
+    if st.button("⚡ Sync Live ESPN Scores & Results", use_container_width=True):
+        count = sync_pipeline(today_str)
+        st.success(f"Updated live scores for {count} fixtures!")
         st.rerun()
 
     st.markdown("---")
@@ -493,7 +498,7 @@ with main_tabs[0]:
 
 # TAB 2: ANTI-CUT ACCUMULATOR (SPORTYBET)
 with main_tabs[1]:
-    st.caption("🛡️ Multi-bet compounder strictly built from active SportyBet fixtures. Ghost matches eliminated.")
+    st.caption("🛡️ Multi-bet compounder with live game auto-pruning. Ended games are dropped; remaining active matches are booked.")
 
     cashout_tier = st.radio(
         "Select Multiplier Package:",
@@ -515,42 +520,61 @@ with main_tabs[1]:
     sample_stake = 100
     est_payout = f"₦{round(sample_stake * accum_odds):,}"
 
-    # REAL SPORTYBET LIVE SERVER INTEGRATION
+    # Load persistent booking code from SQLite so it NEVER disappears
+    stored_code_data = db.get_setting(f"persisted_code_{cashout_tier}", "{}")
+    persisted_info = json.loads(stored_code_data) if stored_code_data != "{}" else {}
+
     col_btn, _ = st.columns([2, 1])
     with col_btn:
         if st.button("⚡ BOOK LIVE TICKET ON SPORTYBET", use_container_width=True):
             if sportybet:
-                with st.spinner("Talking to SportyBet Server & Booking Ticket..."):
-                    code, err, booked_games = sportybet.generate_sportybet_code(legs)
+                with st.spinner("Pruning Ended Games & Registering Ticket on SportyBet Server..."):
+                    code, err, booked_games, skipped_games = sportybet.generate_sportybet_code(legs)
                     if code:
-                        st.session_state["real_sporty_code"] = code
-                        st.session_state["booked_games"] = booked_games
+                        persisted_info = {
+                            "code": code,
+                            "booked": booked_games,
+                            "skipped": skipped_games,
+                            "time": datetime.utcnow().strftime("%H:%M UTC")
+                        }
+                        db.set_setting(f"persisted_code_{cashout_tier}", json.dumps(persisted_info))
                         st.success(f"Official SportyBet Ticket Registered: {code}")
                     else:
                         st.error(f"SportyBet Booking Notice: {err}")
             else:
                 st.error("sportybet.py module missing.")
 
-    if "real_sporty_code" in st.session_state:
-        code = st.session_state["real_sporty_code"]
-        booked_games = st.session_state.get("booked_games", [])
+    # Always display the code if it exists in persistent memory!
+    if persisted_info.get("code"):
+        code = persisted_info["code"]
+        booked_games = persisted_info.get("booked", [])
+        skipped_games = persisted_info.get("skipped", [])
+        gen_time = persisted_info.get("time", "")
 
         st.markdown(f"""
         <div class="sporty-vault-card">
             <div style="font-size: 0.8rem; font-weight: 800; color: #10B981; letter-spacing: 0.1em; text-transform: uppercase;">
-                Official SportyBet Booking Code ({cashout_tier})
+                Official SportyBet Booking Code ({cashout_tier}) • Active & Saved
             </div>
             <div class="sporty-code-big">{code}</div>
             <div style="color: #94A3B8; font-size: 0.88rem; font-weight: 600;">
                 Open SportyBet App ➡️ Tap <b>Load Code</b> ➡️ Paste <b>{code}</b>
             </div>
+            <div style="font-size: 0.72rem; color: #64748B; margin-top: 6px;">
+                Code permanently locked in vault (Generated at {gen_time})
+            </div>
         </div>
         """, unsafe_allow_html=True)
 
         if booked_games:
-            with st.expander(f"📋 Verified Games On This SportyBet Ticket ({len(booked_games)} matches)"):
+            with st.expander(f"📋 Active Upcoming Games On This Ticket ({len(booked_games)} matches)"):
                 for g in booked_games:
                     st.write(f"• {g}")
+
+        if skipped_games:
+            with st.expander("ℹ️ Matches Auto-Dropped (Already Started / Ended)"):
+                for s in skipped_games:
+                    st.caption(f"• {s}")
 
     if legs:
         st.markdown(f"""
@@ -586,8 +610,6 @@ with main_tabs[1]:
                     </div>
                 </div>
                 """, unsafe_allow_html=True)
-    else:
-        st.info("No active games found.")
 
 # TAB 3: PERFORMANCE
 with main_tabs[2]:
