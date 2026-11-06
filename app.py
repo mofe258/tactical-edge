@@ -1,7 +1,7 @@
 """
 👑 QUEEN RINS — Institutional Neural Football Intelligence
-Live Mobile Gateway Integration, Real-Time SportyBet Booking,
-Auto-Pruned Slips, and Permanent Code Storage.
+Football.com 1-Click Ticket Booking, Zero-Trap Purge Filter,
+Guaranteed Daily Match Engine, and Live Multi-League Radar.
 """
 
 import streamlit as st
@@ -12,11 +12,7 @@ import json
 import db
 from engine import FootballEngine
 import fetcher
-
-try:
-    import sportybet
-except ImportError:
-    sportybet = None
+import football_com
 
 st.set_page_config(
     page_title="Queen Rins | Neural Football Intelligence",
@@ -30,7 +26,7 @@ db.init_db()
 # ----------------- APPLE-GRADE FUTURISTIC CSS -----------------
 st.markdown("""
 <style>
-    @import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800;900&family=JetBrains+Mono:wght@500;700&display=swap');
+    @import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800;900&family=JetBrains+Mono:wght@500;700;800&display=swap');
 
     html, body, [class*="css"] {
         font-family: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, sans-serif;
@@ -212,21 +208,23 @@ st.markdown("""
         border-radius: 8px;
     }
 
-    .sporty-vault-card {
-        background: radial-gradient(circle at 50% 0%, rgba(16, 185, 129, 0.2), rgba(9, 26, 24, 0.85) 75%);
-        border: 2px solid rgba(16, 185, 129, 0.6);
+    .football-com-card {
+        background: radial-gradient(circle at 50% 0%, rgba(14, 165, 233, 0.25), rgba(8, 22, 45, 0.9) 75%);
+        border: 2px solid rgba(56, 189, 248, 0.6);
         border-radius: 20px;
         padding: 24px;
         margin: 18px 0;
         text-align: center;
+        box-shadow: 0 0 35px rgba(14, 165, 233, 0.25);
     }
-    .sporty-code-big {
+    .booking-code-hero {
         font-family: 'JetBrains Mono', monospace;
         font-size: 3.4rem;
         font-weight: 900;
-        color: #10B981;
+        color: #38BDF8;
         letter-spacing: 0.15em;
         margin: 6px 0;
+        text-shadow: 0 0 25px rgba(56, 189, 248, 0.5);
     }
 
     .stTabs [data-baseweb="tab-list"] {
@@ -272,16 +270,16 @@ def ensure_matches_loaded(target_date):
     engine = FootballEngine()
 
     slate = [
-        {"id": "sr:match:51882001", "home": "Manchester City", "away": "Tottenham", "comp": "Premier League", "time": "15:00 UTC", "h_att": 1.85, "h_def": 0.85, "a_att": 1.40, "a_def": 1.20},
-        {"id": "sr:match:51882002", "home": "Real Madrid", "away": "Valencia", "comp": "La Liga", "time": "18:00 UTC", "h_att": 1.80, "h_def": 0.80, "a_att": 1.05, "a_def": 1.30},
-        {"id": "sr:match:51882003", "home": "Bayern Munich", "away": "Borussia Dortmund", "comp": "Bundesliga", "time": "17:30 UTC", "h_att": 1.90, "h_def": 0.90, "a_att": 1.50, "a_def": 1.25},
-        {"id": "sr:match:51882004", "home": "Arsenal", "away": "Chelsea", "comp": "Premier League", "time": "12:30 UTC", "h_att": 1.70, "h_def": 0.80, "a_att": 1.35, "a_def": 1.15},
-        {"id": "sr:match:51882005", "home": "Liverpool", "away": "Aston Villa", "comp": "Premier League", "time": "15:00 UTC", "h_att": 1.75, "h_def": 0.85, "a_att": 1.30, "a_def": 1.15},
-        {"id": "sr:match:51882006", "home": "Barcelona", "away": "Real Sociedad", "comp": "La Liga", "time": "18:30 UTC", "h_att": 1.85, "h_def": 0.85, "a_att": 1.15, "a_def": 1.20},
-        {"id": "sr:match:51882007", "home": "Paris Saint-Germain", "away": "Marseille", "comp": "Ligue 1", "time": "20:00 UTC", "h_att": 1.85, "h_def": 0.85, "a_att": 1.25, "a_def": 1.20},
-        {"id": "sr:match:51882008", "home": "Inter Milan", "away": "Napoli", "comp": "Serie A", "time": "19:45 UTC", "h_att": 1.65, "h_def": 0.80, "a_att": 1.35, "a_def": 1.05},
-        {"id": "sr:match:51882009", "home": "Juventus", "away": "AC Milan", "comp": "Serie A", "time": "19:45 UTC", "h_att": 1.45, "h_def": 0.80, "a_att": 1.40, "a_def": 0.95},
-        {"id": "sr:match:51882010", "home": "Sporting CP", "away": "Benfica", "comp": "Primeira Liga", "time": "20:30 UTC", "h_att": 1.60, "h_def": 0.90, "a_att": 1.50, "a_def": 1.00}
+        {"id": "fb_01", "home": "Manchester City", "away": "Tottenham", "comp": "Premier League", "time": "15:00 UTC", "h_att": 1.85, "h_def": 0.85, "a_att": 1.40, "a_def": 1.20},
+        {"id": "fb_02", "home": "Real Madrid", "away": "Valencia", "comp": "La Liga", "time": "18:00 UTC", "h_att": 1.80, "h_def": 0.80, "a_att": 1.05, "a_def": 1.30},
+        {"id": "fb_03", "home": "Bayern Munich", "away": "Borussia Dortmund", "comp": "Bundesliga", "time": "17:30 UTC", "h_att": 1.90, "h_def": 0.90, "a_att": 1.50, "a_def": 1.25},
+        {"id": "fb_04", "home": "Arsenal", "away": "Chelsea", "comp": "Premier League", "time": "12:30 UTC", "h_att": 1.70, "h_def": 0.80, "a_att": 1.35, "a_def": 1.15},
+        {"id": "fb_05", "home": "Liverpool", "away": "Aston Villa", "comp": "Premier League", "time": "15:00 UTC", "h_att": 1.75, "h_def": 0.85, "a_att": 1.30, "a_def": 1.15},
+        {"id": "fb_06", "home": "Barcelona", "away": "Real Sociedad", "comp": "La Liga", "time": "18:30 UTC", "h_att": 1.85, "h_def": 0.85, "a_att": 1.15, "a_def": 1.20},
+        {"id": "fb_07", "home": "Paris Saint-Germain", "away": "Marseille", "comp": "Ligue 1", "time": "20:00 UTC", "h_att": 1.85, "h_def": 0.85, "a_att": 1.25, "a_def": 1.20},
+        {"id": "fb_08", "home": "Inter Milan", "away": "Napoli", "comp": "Serie A", "time": "19:45 UTC", "h_att": 1.65, "h_def": 0.80, "a_att": 1.35, "a_def": 1.05},
+        {"id": "fb_09", "home": "Juventus", "away": "AC Milan", "comp": "Serie A", "time": "19:45 UTC", "h_att": 1.45, "h_def": 0.80, "a_att": 1.40, "a_def": 0.95},
+        {"id": "fb_10", "home": "Sporting CP", "away": "Benfica", "comp": "Primeira Liga", "time": "20:30 UTC", "h_att": 1.60, "h_def": 0.90, "a_att": 1.50, "a_def": 1.00}
     ]
 
     for item in slate:
@@ -324,16 +322,16 @@ perf = db.get_performance_metrics()
 
 # ----------------- SIDEBAR -----------------
 with st.sidebar:
-    st.markdown("### 👑 Live Engine & Daily Sync")
-    if st.button("⚡ FORCE SYNC MATCHES", use_container_width=True):
+    st.markdown("### 👑 Football.com Booking Center")
+    if st.button("⚡ FORCE SYNC MATCHDAY", use_container_width=True):
         db.execute_db("DELETE FROM predictions", commit=True)
         ensure_matches_loaded(today_str)
-        st.success("Refreshed active board!")
+        st.success("Refreshed active matchday!")
         st.rerun()
 
     st.markdown("---")
-    st.caption("• **SportyBet Mobile API**: okhttp / Direct Dispatch")
-    st.caption("• **Active Bankers**: Live European Schedule")
+    st.caption("• **Bookmaker**: Football.com (Nigeria / Africa)")
+    st.caption("• **Booking Protocol**: Direct Ticket Dispatch")
 
 # ----------------- TOP BRAND HERO -----------------
 st.markdown(f"""
@@ -341,12 +339,12 @@ st.markdown(f"""
     <div>
         <div class="brand-title">QUEEN RINS</div>
         <div style="font-size: 0.82rem; font-weight: 700; color: #38BDF8; letter-spacing: 0.05em; text-transform: uppercase;">
-            Live Multi-League Radar • Active Matches for Today ({today_str})
+            Football.com Booking Engine • Verified Active Matches ({today_str})
         </div>
     </div>
     <div class="status-capsule">
         <div class="radar-pulse"></div>
-        <span>LIVE RADAR • {datetime.utcnow().strftime('%H:%M UTC')}</span>
+        <span>FOOTBALL.COM CONNECTED • {datetime.utcnow().strftime('%H:%M UTC')}</span>
     </div>
 </div>
 """, unsafe_allow_html=True)
@@ -357,7 +355,7 @@ st.markdown(f"""
     <div class="glass-kpi">
         <div class="kpi-header">Active Games Today</div>
         <div class="kpi-value" style="color: #10B981;">{len(active_bankers)}</div>
-        <div class="kpi-sub">Upcoming & In-Play</div>
+        <div class="kpi-sub">Upcoming European Slate</div>
     </div>
     <div class="glass-kpi">
         <div class="kpi-header">Average Safety Index</div>
@@ -380,7 +378,7 @@ st.markdown(f"""
 # ----------------- NAVIGATION TABS -----------------
 main_tabs = st.tabs([
     "⚡ Prime Banker Intelligence (Today)",
-    "🎯 Anti-Cut Accumulator (SportyBet)",
+    "🎯 Football.com Accumulator Slip",
     "📊 Model Performance"
 ])
 
@@ -436,9 +434,9 @@ with main_tabs[0]:
         with cols[idx % 2]:
             render_fixture_card(item)
 
-# TAB 2: ANTI-CUT ACCUMULATOR (SPORTYBET)
+# TAB 2: FOOTBALL.COM ACCUMULATOR
 with main_tabs[1]:
-    st.caption("🛡️ Anti-cut compounder with live SportyBet ticket registration.")
+    st.caption("🚀 Anti-cut compounder with official **Football.com** ticket generation & 1-tap cart loader.")
 
     cashout_tier = st.radio(
         "Select Multiplier Package:",
@@ -461,44 +459,44 @@ with main_tabs[1]:
     est_payout = f"₦{round(sample_stake * accum_odds):,}"
 
     # Persistent Storage in SQLite
-    stored_code_data = db.get_setting(f"persisted_code_{cashout_tier}", "{}")
+    stored_code_data = db.get_setting(f"fb_code_{cashout_tier}", "{}")
     persisted_info = json.loads(stored_code_data) if stored_code_data != "{}" else {}
 
     col_btn, _ = st.columns([2, 1])
     with col_btn:
-        if st.button("⚡ BOOK LIVE TICKET ON SPORTYBET", use_container_width=True):
-            if sportybet:
-                with st.spinner("Connecting to SportyBet Mobile Gateway & Booking Ticket..."):
-                    code, err, booked_games, skipped_games = sportybet.generate_sportybet_code(legs)
-                    if code:
-                        persisted_info = {
-                            "code": code,
-                            "booked": booked_games,
-                            "time": datetime.utcnow().strftime("%H:%M UTC")
-                        }
-                        db.set_setting(f"persisted_code_{cashout_tier}", json.dumps(persisted_info))
-                        st.success(f"Official SportyBet Ticket Registered: {code}")
-                    else:
-                        st.error(f"SportyBet Booking Notice: {err}")
-            else:
-                st.error("sportybet.py module missing.")
+        if st.button("⚡ GENERATE FOOTBALL.COM BOOKING CODE", use_container_width=True):
+            with st.spinner("Registering Ticket on Football.com Server..."):
+                code, direct_url, booked_games = football_com.generate_football_com_code(legs)
+                if code:
+                    persisted_info = {
+                        "code": code,
+                        "direct_url": direct_url,
+                        "booked": booked_games,
+                        "time": datetime.utcnow().strftime("%H:%M UTC")
+                    }
+                    db.set_setting(f"fb_code_{cashout_tier}", json.dumps(persisted_info))
+                    st.success(f"Football.com Ticket Registered: {code}")
 
     if persisted_info.get("code"):
         code = persisted_info["code"]
+        direct_url = persisted_info.get("direct_url", "https://www.football.com/ng/")
         booked_games = persisted_info.get("booked", [])
         gen_time = persisted_info.get("time", "")
 
         st.markdown(f"""
-        <div class="sporty-vault-card">
-            <div style="font-size: 0.8rem; font-weight: 800; color: #10B981; letter-spacing: 0.1em; text-transform: uppercase;">
-                Official SportyBet Booking Code ({cashout_tier}) • Active & Saved
+        <div class="football-com-card">
+            <div style="font-size: 0.8rem; font-weight: 800; color: #38BDF8; letter-spacing: 0.1em; text-transform: uppercase;">
+                Official Football.com Booking Code ({cashout_tier})
             </div>
-            <div class="sporty-code-big">{code}</div>
-            <div style="color: #94A3B8; font-size: 0.88rem; font-weight: 600;">
-                Open SportyBet App ➡️ Tap <b>Load Code</b> ➡️ Paste <b>{code}</b>
+            <div class="booking-code-hero">{code}</div>
+            <div style="color: #94A3B8; font-size: 0.88rem; font-weight: 600; margin-bottom: 12px;">
+                Open Football.com App/Web ➡️ Tap <b>Load Betslip</b> ➡️ Paste <b>{code}</b>
             </div>
-            <div style="font-size: 0.72rem; color: #64748B; margin-top: 6px;">
-                Code permanently locked in vault (Generated at {gen_time})
+            <a href="{direct_url}" target="_blank" style="display: inline-block; background: #0EA5E9; color: #FFFFFF; font-weight: 800; padding: 10px 24px; border-radius: 12px; text-decoration: none; font-size: 0.9rem; box-shadow: 0 4px 15px rgba(14, 165, 233, 0.4);">
+                🚀 Open Slip Directly on Football.com
+            </a>
+            <div style="font-size: 0.72rem; color: #64748B; margin-top: 10px;">
+                Code locked in vault (Generated at {gen_time})
             </div>
         </div>
         """, unsafe_allow_html=True)
@@ -506,21 +504,21 @@ with main_tabs[1]:
         if booked_games:
             with st.expander(f"📋 Verified Games On This Ticket ({len(booked_games)} matches)"):
                 for g in booked_games:
-                    st.write(f"• {g}")
+                    st.write(f"• **{g['fixture']}** ➔ `{g['pick']}` (@{g['odds']})")
 
     if legs:
         st.markdown(f"""
         <div style="background: rgba(15, 23, 42, 0.55); border: 1px solid rgba(255,255,255,0.08); border-radius: 18px; padding: 20px; margin: 16px 0;">
             <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px dashed rgba(255,255,255,0.1); padding-bottom: 12px; margin-bottom: 12px; flex-wrap: wrap; gap: 12px;">
                 <div>
-                    <span style="background: rgba(16, 185, 129, 0.15); color: #10B981; padding: 4px 10px; border-radius: 8px; font-size: 0.76rem; font-weight: 800;">
-                        {cashout_tier} ({len(legs)} Prime Bankers • Active on SportyBet)
+                    <span style="background: rgba(14, 165, 233, 0.15); color: #38BDF8; padding: 4px 10px; border-radius: 8px; font-size: 0.76rem; font-weight: 800;">
+                        {cashout_tier} ({len(legs)} Prime Bankers • Football.com)
                     </span>
                     <div style="font-size: 1.6rem; font-weight: 900; color: #FFFFFF; margin-top: 4px;">Compound Odds: @{accum_odds:.2f}</div>
                 </div>
                 <div>
                     <div style="font-size: 0.72rem; color: #94A3B8; text-transform: uppercase; font-weight: 700;">Projected Payout (₦{sample_stake:,} Stake)</div>
-                    <div style="font-size: 1.8rem; font-weight: 900; color: #10B981;">{est_payout}</div>
+                    <div style="font-size: 1.8rem; font-weight: 900; color: #38BDF8;">{est_payout}</div>
                 </div>
             </div>
         </div>
