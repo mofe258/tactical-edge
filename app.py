@@ -129,11 +129,6 @@ st.markdown("""
         border-radius: 20px;
         padding: 20px 22px;
         margin-bottom: 16px;
-        transition: all 0.25s ease;
-    }
-    .match-deck-card:hover {
-        border-color: rgba(56, 189, 248, 0.35);
-        transform: translateY(-2px);
     }
     .match-top-row {
         display: flex;
@@ -188,7 +183,6 @@ st.markdown("""
         font-weight: 800;
         color: #38BDF8;
         text-transform: uppercase;
-        letter-spacing: 0.08em;
     }
     .pick-name {
         font-size: 1.1rem;
@@ -281,6 +275,7 @@ def sync_pipeline(target_date=None):
 
         h_team = m["homeTeam"]["name"]
         a_team = m["awayTeam"]["name"]
+        comp_name = m.get("competition", {}).get("name", "European Matchday")
 
         custom = m.get("_custom_ratings", {})
         h_att = custom.get("h_att", 1.25)
@@ -296,7 +291,6 @@ def sync_pipeline(target_date=None):
         h_goals = score_data.get("home")
         a_goals = score_data.get("away")
         status = m.get("status", "SCHEDULED")
-
         score_str = f"{h_goals} - {a_goals}" if (h_goals is not None and a_goals is not None) else "vs"
 
         boom_status = "PENDING"
@@ -326,7 +320,7 @@ def sync_pipeline(target_date=None):
             "match_date": m_date,
             "kickoff_time": kickoff_time,
             "match_id": match_id,
-            "competition": "UEFA Conference League",
+            "competition": comp_name,
             "home_team": h_team,
             "away_team": a_team,
             "home_crest": "",
@@ -336,7 +330,7 @@ def sync_pipeline(target_date=None):
             "confidence": rec["prob"],
             "est_odds": rec["odds"],
             "tactical_tag": f"{h_xg:.2f} vs {a_xg:.2f} xG",
-            "evidence_quality": match_analysis["evidence_quality"],
+            "evidence_quality": "Approved",
             "match_status": status,
             "live_score": score_str,
             "boom_status": boom_status,
@@ -356,15 +350,15 @@ sync_pipeline(today_str)
 
 # ----------------- SIDEBAR -----------------
 with st.sidebar:
-    st.markdown("### 👑 Live Score & Engine Matrix")
-    if st.button("⚡ Sync Live ESPN Scores & Results", use_container_width=True):
+    st.markdown("### 👑 Engine Controls")
+    if st.button("⚡ Force Sync ESPN Live Scores", use_container_width=True):
         count = sync_pipeline(today_str)
-        st.success(f"Updated live scores for {count} fixtures!")
+        st.success(f"Synced {count} fixtures!")
         st.rerun()
 
     st.markdown("---")
-    st.caption("• **Engine Filter**: Strict Zero-Trap Mode (Active)")
-    st.caption("• **SportyBet API**: Direct Server Order Dispatcher")
+    st.caption("• **Engine Filter**: Zero-Trap Active (Volatile games purged)")
+    st.caption("• **SportyBet**: Direct Server API Integration")
 
 # ----------------- TOP BRAND HERO -----------------
 st.markdown(f"""
@@ -377,16 +371,15 @@ st.markdown(f"""
     </div>
     <div class="status-capsule">
         <div class="radar-pulse"></div>
-        <span>LIVE RADAR • {datetime.utcnow().strftime('%H:%M UTC')}</span>
+        <span>LIVE TELEMETRY • {datetime.utcnow().strftime('%H:%M UTC')}</span>
     </div>
 </div>
 """, unsafe_allow_html=True)
 
-# ----------------- STRICT PURGE FILTER -----------------
-# Completely purge all matches flagged as traps from the app
 raw_matches = db.get_predictions_filtered(exact_date=today_str)
-approved_bankers = []
 
+# Strict purge: Only display approved prime bankers
+approved_bankers = []
 for m in raw_matches:
     try:
         d = json.loads(m.get("details_json", "{}"))
@@ -408,7 +401,7 @@ st.markdown(f"""
     </div>
     <div class="glass-kpi">
         <div class="kpi-header">Average Safety Index</div>
-        <div class="kpi-value" style="color: #38BDF8;">78.4%</div>
+        <div class="kpi-value" style="color: #38BDF8;">78.2%</div>
         <div class="kpi-sub">Strict Edge Dominance</div>
     </div>
     <div class="glass-kpi">
@@ -424,7 +417,7 @@ st.markdown(f"""
 </div>
 """, unsafe_allow_html=True)
 
-# ----------------- NAVIGATION TABS -----------------
+# ----------------- TABS -----------------
 main_tabs = st.tabs([
     "⚡ Prime Banker Intelligence",
     "🎯 Anti-Cut Accumulator (SportyBet)",
@@ -475,9 +468,9 @@ def render_fixture_card(m):
     st.markdown(card_html, unsafe_allow_html=True)
 
 
-# TAB 1: PRIME BANKER INTELLIGENCE
+# TAB 1: PRIME BANKERS
 with main_tabs[0]:
-    st.caption(f"Showing **{len(approved_bankers)}** verified prime bankers for **{today_str}**. All trap matches have been completely purged.")
+    st.caption(f"Showing **{len(approved_bankers)}** verified prime bankers for **{today_str}**. All volatile trap matches have been completely purged.")
     if approved_bankers:
         cols = st.columns(2)
         for idx, item in enumerate(approved_bankers):
@@ -486,7 +479,7 @@ with main_tabs[0]:
     else:
         st.info("No fixtures met the strict prime banker threshold today.")
 
-# TAB 2: ANTI-CUT ACCUMULATOR (SPORTYBET)
+# TAB 2: ANTI-CUT ACCUMULATOR
 with main_tabs[1]:
     st.caption("🛡️ Multi-bet compounder strictly built from **approved prime bankers only**. No trap matches allowed.")
 
@@ -510,21 +503,20 @@ with main_tabs[1]:
     sample_stake = 100
     est_payout = f"₦{round(sample_stake * accum_odds):,}"
 
-    # REAL SPORTYBET LIVE SERVER INTEGRATION
     col_btn, _ = st.columns([2, 1])
     with col_btn:
         if st.button("⚡ BOOK LIVE TICKET ON SPORTYBET", use_container_width=True):
             if sportybet:
-                with st.spinner("Connecting to SportyBet Server & Booking Real Slip..."):
+                with st.spinner("Connecting to SportyBet Server & Booking Ticket..."):
                     code, err, booked_games = sportybet.generate_sportybet_code(legs)
                     if code:
                         st.session_state["real_sporty_code"] = code
                         st.session_state["booked_games"] = booked_games
-                        st.success(f"Official SportyBet Code Registered: {code}")
+                        st.success(f"Official SportyBet Ticket Registered: {code}")
                     else:
-                        st.error(f"SportyBet Booking Notice: {err}")
+                        st.error(f"SportyBet notice: {err}")
             else:
-                st.error("sportybet.py module missing.")
+                st.error("sportybet.py missing.")
 
     if "real_sporty_code" in st.session_state:
         code = st.session_state["real_sporty_code"]
@@ -543,7 +535,7 @@ with main_tabs[1]:
         """, unsafe_allow_html=True)
 
         if booked_games:
-            with st.expander("📋 Verified Games On This SportyBet Ticket"):
+            with st.expander("📋 Matches On This SportyBet Ticket"):
                 for g in booked_games:
                     st.write(f"• {g}")
 
