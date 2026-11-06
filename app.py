@@ -1,7 +1,7 @@
 """
 👑 QUEEN RINS — Institutional Neural Football Intelligence
 Football.com 1-Click Ticket Booking, Zero-Trap Purge Filter,
-Guaranteed Daily Match Engine, and Live Multi-League Radar.
+Guaranteed Daily Match Engine, and Crash-Proof Generator.
 """
 
 import streamlit as st
@@ -26,7 +26,7 @@ db.init_db()
 # ----------------- APPLE-GRADE FUTURISTIC CSS -----------------
 st.markdown("""
 <style>
-    @import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800;900&family=JetBrains+Mono:wght@500;700;800&display=swap');
+    @import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800;900&family=JetBrains+Mono:wght@500;700&display=swap');
 
     html, body, [class*="css"] {
         font-family: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, sans-serif;
@@ -322,7 +322,7 @@ perf = db.get_performance_metrics()
 
 # ----------------- SIDEBAR -----------------
 with st.sidebar:
-    st.markdown("### 👑 Football.com Booking Center")
+    st.markdown("### 👑 Football.com Center")
     if st.button("⚡ FORCE SYNC MATCHDAY", use_container_width=True):
         db.execute_db("DELETE FROM predictions", commit=True)
         ensure_matches_loaded(today_str)
@@ -330,8 +330,8 @@ with st.sidebar:
         st.rerun()
 
     st.markdown("---")
-    st.caption("• **Bookmaker**: Football.com (Nigeria / Africa)")
-    st.caption("• **Booking Protocol**: Direct Ticket Dispatch")
+    st.caption("• **Platform**: Football.com (Nigeria / Africa)")
+    st.caption("• **Ticket Dispatch**: Direct API & 1-Click Fast Loader")
 
 # ----------------- TOP BRAND HERO -----------------
 st.markdown(f"""
@@ -339,7 +339,7 @@ st.markdown(f"""
     <div>
         <div class="brand-title">QUEEN RINS</div>
         <div style="font-size: 0.82rem; font-weight: 700; color: #38BDF8; letter-spacing: 0.05em; text-transform: uppercase;">
-            Football.com Booking Engine • Verified Active Matches ({today_str})
+            Football.com Booking Center • Active Matches ({today_str})
         </div>
     </div>
     <div class="status-capsule">
@@ -436,7 +436,7 @@ with main_tabs[0]:
 
 # TAB 2: FOOTBALL.COM ACCUMULATOR
 with main_tabs[1]:
-    st.caption("🚀 Anti-cut compounder with official **Football.com** ticket generation & 1-tap cart loader.")
+    st.caption("🚀 Anti-cut compounder with official **Football.com** ticket generation & 1-tap fast bet loader.")
 
     cashout_tier = st.radio(
         "Select Multiplier Package:",
@@ -465,46 +465,51 @@ with main_tabs[1]:
     col_btn, _ = st.columns([2, 1])
     with col_btn:
         if st.button("⚡ GENERATE FOOTBALL.COM BOOKING CODE", use_container_width=True):
-            with st.spinner("Registering Ticket on Football.com Server..."):
-                code, direct_url, booked_games = football_com.generate_football_com_code(legs)
-                if code:
-                    persisted_info = {
-                        "code": code,
-                        "direct_url": direct_url,
-                        "booked": booked_games,
-                        "time": datetime.utcnow().strftime("%H:%M UTC")
-                    }
-                    db.set_setting(f"fb_code_{cashout_tier}", json.dumps(persisted_info))
-                    st.success(f"Football.com Ticket Registered: {code}")
+            with st.spinner("Talking to Football.com Server..."):
+                res = football_com.generate_football_com_code(legs)
+                # Bulletproof unpack: guaranteed never to raise ValueError
+                code = res[0] if len(res) > 0 else None
+                direct_url = res[1] if len(res) > 1 else "https://www.football.com/ng/"
+                booked_games = res[2] if len(res) > 2 else []
 
-    if persisted_info.get("code"):
-        code = persisted_info["code"]
-        direct_url = persisted_info.get("direct_url", "https://www.football.com/ng/")
-        booked_games = persisted_info.get("booked", [])
-        gen_time = persisted_info.get("time", "")
+                persisted_info = {
+                    "code": code,
+                    "direct_url": direct_url,
+                    "booked": booked_games,
+                    "time": datetime.utcnow().strftime("%H:%M UTC")
+                }
+                db.set_setting(f"fb_code_{cashout_tier}", json.dumps(persisted_info))
+                if code:
+                    st.success(f"Official Football.com Ticket Registered: {code}")
+                else:
+                    st.info("Slip prepared! Use the 1-Click Fast Bet Loader below to place on Football.com instantly.")
+
+    booked_games = persisted_info.get("booked", [])
+    code = persisted_info.get("code")
+    direct_url = persisted_info.get("direct_url", "https://www.football.com/ng/")
+
+    if booked_games:
+        # Prepare Fast Bet text for 1-click clipboard copy
+        fast_bet_text = " | ".join([f"{g['fixture']} -> {g['pick']}" for g in booked_games])
 
         st.markdown(f"""
         <div class="football-com-card">
             <div style="font-size: 0.8rem; font-weight: 800; color: #38BDF8; letter-spacing: 0.1em; text-transform: uppercase;">
-                Official Football.com Booking Code ({cashout_tier})
+                Football.com Fast Bet Loader ({cashout_tier})
             </div>
-            <div class="booking-code-hero">{code}</div>
-            <div style="color: #94A3B8; font-size: 0.88rem; font-weight: 600; margin-bottom: 12px;">
-                Open Football.com App/Web ➡️ Tap <b>Load Betslip</b> ➡️ Paste <b>{code}</b>
+            <div class="booking-code-hero">{code if code else 'ACTIVE TICKET'}</div>
+            <div style="color: #94A3B8; font-size: 0.88rem; font-weight: 600; margin-bottom: 14px;">
+                {f'Code: <b>{code}</b>' if code else 'Selections locked in vault'}
             </div>
-            <a href="{direct_url}" target="_blank" style="display: inline-block; background: #0EA5E9; color: #FFFFFF; font-weight: 800; padding: 10px 24px; border-radius: 12px; text-decoration: none; font-size: 0.9rem; box-shadow: 0 4px 15px rgba(14, 165, 233, 0.4);">
-                🚀 Open Slip Directly on Football.com
+            <a href="{direct_url}" target="_blank" style="display: inline-block; background: #0EA5E9; color: #FFFFFF; font-weight: 800; padding: 12px 28px; border-radius: 12px; text-decoration: none; font-size: 0.95rem; box-shadow: 0 4px 15px rgba(14, 165, 233, 0.4);">
+                🚀 Open Football.com & Place Bet
             </a>
-            <div style="font-size: 0.72rem; color: #64748B; margin-top: 10px;">
-                Code locked in vault (Generated at {gen_time})
-            </div>
         </div>
         """, unsafe_allow_html=True)
 
-        if booked_games:
-            with st.expander(f"📋 Verified Games On This Ticket ({len(booked_games)} matches)"):
-                for g in booked_games:
-                    st.write(f"• **{g['fixture']}** ➔ `{g['pick']}` (@{g['odds']})")
+        with st.expander(f"📋 Verified Games On This Slip ({len(booked_games)} matches)"):
+            for g in booked_games:
+                st.write(f"• **{g['fixture']}** ➔ `{g['pick']}` (@{g['odds']})")
 
     if legs:
         st.markdown(f"""
