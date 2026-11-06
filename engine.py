@@ -1,13 +1,11 @@
 """
-engine.py — Anti-Cut Mathematical Engine & 0-5 Minutes Blitz-Decay Model
-Includes:
-- Time-decay Poisson model for First 5 Minutes (Under 0.5 Goals)
-- 1X2, DNB, and Double Chance Banker Algorithms
+engine.py — Institutional Football Intelligence Engine for Queen Rins
+Dixon-Coles Bivariate Poisson with Bayesian Shrinkage,
+Trap Detection, and Natural Market Allocation (1X2, DC, DNB, Over/Under).
 """
 
 import numpy as np
 from scipy.stats import poisson
-import math
 
 
 class FootballEngine:
@@ -36,22 +34,6 @@ class FootballEngine:
         away_xg = float(np.clip(away_xg, 0.35, 2.20))
         return float(round(home_xg, 2)), float(round(away_xg, 2))
 
-    def calculate_early_goal_prob(self, home_xg, away_xg):
-        """
-        Calculates exact mathematical probability of NO GOAL in minutes 0:00 to 4:59.
-        First 5 minutes account for ~4.8% of total 90-minute goal expectancy.
-        """
-        total_xg = home_xg + away_xg
-        # Early-game intensity factor (teams start cautious)
-        lambda_5min = (5.0 / 90.0) * total_xg * 0.85
-        # Poisson P(0 goals) = e^(-lambda)
-        prob_no_goal = math.exp(-lambda_5min)
-        prob_no_goal = min(0.965, max(0.880, prob_no_goal))
-        
-        # Fair bookmaker odds for Under 0.5 Goals (1-5 min)
-        odds = round(max(1.11, min(1.22, (1.0 / prob_no_goal) * 0.96)), 2)
-        return round(prob_no_goal, 3), odds
-
     def _tau_correction(self, h, a, lmbda, mu):
         if h == 0 and a == 0:
             return 1.0 - (lmbda * mu * self.rho)
@@ -70,6 +52,7 @@ class FootballEngine:
                 p_ind = poisson.pmf(h, home_xg) * poisson.pmf(a, away_xg)
                 tau = self._tau_correction(h, a, home_xg, away_xg)
                 matrix[h][a] = max(0.0, p_ind * tau)
+
         m_sum = np.sum(matrix)
         if m_sum > 0:
             matrix = matrix / m_sum
@@ -101,30 +84,28 @@ class FootballEngine:
         delta_xg = abs(home_xg - away_xg)
         is_trap = (delta_xg < 0.28 and prob_draw >= 0.26)
 
-        # 0-5 Mins Calculations
-        p_05_no_goal, odds_05 = self.calculate_early_goal_prob(home_xg, away_xg)
-
+        # Allocate Standard Natural Markets
         if is_trap:
             rec = {"category": "Over/Under Goals", "pick": "Under 3.5 Goals", "prob": round(u_35, 3), "odds": 1.28}
-            safe = False
-        elif p_home >= 0.62 and home_xg >= (away_xg + 0.60):
-            rec = {"category": "1X2", "pick": "Home Win", "prob": round(p_home, 3), "odds": round(max(1.35, (1.0 / p_home) * 0.94), 2)}
-            safe = True
+            is_slip_safe = False
+        elif prob_home >= 0.60 and home_xg >= (away_xg + 0.55):
+            rec = {"category": "1X2", "pick": "Home Win", "prob": round(prob_home, 3), "odds": round(max(1.35, (1.0 / prob_home) * 0.94), 2)}
+            is_slip_safe = True
         elif dc_1x >= 0.76 and home_xg >= away_xg:
             rec = {"category": "Double Chance", "pick": "Home or Draw (1X)", "prob": round(dc_1x, 3), "odds": round(max(1.24, (1.0 / dc_1x) * 0.94), 2)}
-            safe = True
-        elif dc_x2 >= 0.75 and away_xg >= home_xg:
+            is_slip_safe = True
+        elif dc_x2 >= 0.74 and away_xg >= home_xg:
             rec = {"category": "Double Chance", "pick": "Draw or Away (X2)", "prob": round(dc_x2, 3), "odds": round(max(1.25, (1.0 / dc_x2) * 0.94), 2)}
-            safe = True
-        elif o_25 >= 0.62 and (home_xg + away_xg) >= 2.90:
+            is_slip_safe = True
+        elif o_25 >= 0.60 and (home_xg + away_xg) >= 2.85:
             rec = {"category": "Over/Under Goals", "pick": "Over 2.5 Goals", "prob": round(o_25, 3), "odds": round(max(1.55, (1.0 / o_25) * 0.94), 2)}
-            safe = True
-        elif dnb_home >= 0.70:
+            is_slip_safe = True
+        elif dnb_home >= 0.68:
             rec = {"category": "Draw No Bet", "pick": "Home DNB", "prob": round(dnb_home, 3), "odds": round(max(1.32, (1.0 / dnb_home) * 0.93), 2)}
-            safe = True
+            is_slip_safe = True
         else:
             rec = {"category": "Double Chance", "pick": "Home or Draw (1X)", "prob": 0.70, "odds": 1.30}
-            safe = False
+            is_slip_safe = False
 
         return {
             "home_xg": home_xg,
@@ -132,14 +113,10 @@ class FootballEngine:
             "prob_home": prob_home,
             "prob_draw": prob_draw,
             "prob_away": prob_away,
-            "is_accumulator_eligible": safe,
-            "recommendation": rec,
-            "early_market": {
-                "category": "1-5 Mins Goals",
-                "pick": "Under 0.5 (1-5 Min)",
-                "prob": p_05_no_goal,
-                "odds": odds_05
-            }
+            "evidence_quality": "Approved Prime Banker" if is_slip_safe else "Trap (Purged)",
+            "is_accumulator_eligible": is_slip_safe,
+            "reliability_score": round(rec["prob"] * 100, 1),
+            "recommendation": rec
         }
 
     @staticmethod
