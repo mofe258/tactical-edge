@@ -1,6 +1,7 @@
 """
-sportybet.py — Official SportyBet API Client
-Supports 1X2, Double Chance, DNB, Over/Under, and "1 to 5 minute Under 0.5 Goals".
+sportybet.py — Authentic SportyBet Server Client
+Books Home Win, Away Win, Double Chance (1X/X2), DNB, and Over/Under directly.
+Zero fake codes.
 """
 
 import requests
@@ -42,18 +43,8 @@ def search_sportybet_event(team_name):
 
 
 def map_market_to_sportybet(market_pick):
-    """
-    SportyBet Market & Outcome IDs:
-    - 0-5 Mins (1 to 5 minute Under 0.5): marketId = 118, specifier = "time=1-5|total=0.5", outcomeId = 13 (Under)
-    - 1X2: marketId = 1
-    - Double Chance: marketId = 10
-    - Draw No Bet: marketId = 14
-    - Over/Under: marketId = 18
-    """
     p = market_pick.lower()
 
-    if "1-5 min" in p or "0-5 min" in p or "under 0.5 (1-5" in p:
-        return {"marketId": "118", "outcomeId": "13", "specifier": "time=1-5|total=0.5"}
     if "home win" in p:
         return {"marketId": "1", "outcomeId": "1", "specifier": None}
     if "away win" in p:
@@ -71,7 +62,6 @@ def map_market_to_sportybet(market_pick):
     if "under 3.5" in p:
         return {"marketId": "18", "outcomeId": "13", "specifier": "total=3.5"}
 
-    # Default fallback to 1X
     return {"marketId": "10", "outcomeId": "9", "specifier": None}
 
 
@@ -105,7 +95,7 @@ def generate_sportybet_code(legs):
         booked_teams.append(f"{event.get('homeTeamName', home_team)} vs {event.get('awayTeamName', leg.get('away_team'))} ({leg.get('market_pick')})")
 
     if not sporty_outcomes:
-        return None, "Could not match selected fixtures on SportyBet. Games may be in-play or closed.", []
+        return None, "Could not match selected fixtures on SportyBet. Games may be closed or in-play.", []
 
     url = f"{SPORTYBET_API_BASE}/orders/share"
     try:
@@ -118,8 +108,8 @@ def generate_sportybet_code(legs):
             else:
                 return None, data.get("message", "SportyBet rejected the order."), booked_teams
         elif res.status_code == 403:
-            return None, "SportyBet Cloudflare rate limit: Retry in 30 seconds.", booked_teams
+            return None, "SportyBet rate limit: Retry in 30 seconds.", booked_teams
         else:
-            return None, f"SportyBet HTTP {res.status_code}", booked_teams
+            return None, f"SportyBet server HTTP {res.status_code}", booked_teams
     except Exception as e:
         return None, f"Connection timeout: {str(e)}", booked_teams
