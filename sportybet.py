@@ -1,11 +1,13 @@
 """
-sportybet.py — Official Direct SportyBet Order Dispatcher
-Books directly using SportyBet's pre-verified internal eventId.
+sportybet.py — Live SportyBet Auto-Pruner & Order Dispatcher
+Automatically detects and removes games that have already started or ended.
+Books all remaining upcoming matches so the booking code always succeeds.
 """
 
 import requests
 import json
 import re
+from datetime import datetime
 
 SPORTYBET_API_BASE = "https://www.sportybet.com/api/ng"
 HEADERS = {
@@ -24,34 +26,33 @@ def clean_name(name):
     return cleaned.split()[0] if cleaned else name
 
 
-def search_live_event_id(team_name):
-    """Finds live eventId on SportyBet."""
+def search_live_event(team_name):
+    """
+    Finds event on SportyBet. Strictly rejects matches that have already kicked off.
+    """
     keyword = clean_name(team_name)
     url = f"{SPORTYBET_API_BASE}/factsCenter/pcOrTabletsSearch"
+    now_ms = datetime.utcnow().timestamp() * 1000
+
     try:
         res = requests.get(url, params={"searchKey": keyword}, headers=HEADERS, timeout=5)
         if res.status_code == 200:
             events = res.json().get("data", {}).get("events", [])
             for ev in events:
-                if ev.get("status", 0) in [0, 1]:
-                    return ev.get("eventId"), ev.get("homeTeamName"), ev.get("awayTeamName")
-            if events:
-                return events[0].get("eventId"), events[0].get("homeTeamName"), events[0].get("awayTeamName")
+                status = ev.get("status", 0)
+                start_time = ev.get("estimateStartTime", 0)
+
+                # Only accept PRE-MATCH games that have NOT kicked off yet
+                # status 0 = not started, and start_time must be in the future (with 2 min buffer)
+                if status == 0 and start_time > (now_ms - 120000):
+                    return ev
     except Exception:
         pass
-    return None, None, None
+    return None
 
 
 def map_market_to_sportybet(market_pick):
-    """
-    Official SportyBet Market & Outcome IDs:
-    - 1X2: marketId = 1 (Home = 1, Away = 3)
-    - Double Chance: marketId = 10 (1X = 9, X2 = 11)
-    - Draw No Bet: marketId = 14 (Home = 1, Away = 3)
-    - Over/Under: marketId = 18 (Over = 12, Under = 13)
-    """
     p = market_pick.lower()
-
     if "home win" in p:
         return {"marketId": "1", "outcomeId": "1", "specifier": None}
     if "away win" in p:
@@ -76,30 +77,32 @@ def map_market_to_sportybet(market_pick):
 
 def generate_sportybet_code(legs):
     """
-    Books the ticket directly to SportyBet's /orders/share API.
+    Prunes ended/kicked-off games and registers ticket for all remaining upcoming fixtures.
     """
     if not legs:
-        return None, "No matches selected.", []
+        return None, "No matches available in slip.", [], []
 
     sporty_outcomes = []
     booked_teams = []
+    skipped_teams = []
 
     for leg in legs:
-        event_id = leg.get("match_id", "")
         home_team = leg.get("home_team", "")
         away_team = leg.get("away_team", "")
 
-        # If ID is not a direct SportyBet sr:match ID, search live board
-        if not str(event_id).startswith("sr:match:"):
-            found_id, h_live, a_live = search_live_event_id(home_team)
-            if not found_id:
-                found_id, h_live, a_live = search_live_event_id(away_team)
-            if found_id:
-                event_id = found_id
-                home_team = h_live or home_team
-                away_team = a_live or away_team
+        # Search for active upcoming match
+        event = search_live_event(home_team)
+        if not event:
+            event = search_live_event(away_team)
 
-        if not str(event_id).startswith("sr:match:"):
+        # If match not found, already started, or ended -> skip it and book the remaining!
+        if not event:
+            skipped_teams.append(f"{home_team} vs {away_team} (Ended / Started / Inactive)")
+            continue
+
+        event_id = event.get("eventId")
+        if not event_id:
+            skipped_teams.append(f"{home_team} vs {away_team}")
             continue
 
         m_info = map_market_to_sportybet(leg.get("market_pick", ""))
@@ -112,11 +115,14 @@ def generate_sportybet_code(legs):
             item["specifier"] = m_info["specifier"]
 
         sporty_outcomes.append(item)
-        booked_teams.append(f"{home_team} vs {away_team} ({leg.get('market_pick')})")
+        h_name = event.get("homeTeamName", home_team)
+        a_name = event.get("awayTeamName", away_team)
+        booked_teams.append(f"{h_name} vs {a_name} ➔ {leg.get('market_pick')}")
 
     if not sporty_outcomes:
-        return None, "Selected matches could not be matched with SportyBet's live IDs. Click 'Purge Stale Fixtures' in the sidebar to refresh.", []
+        return None, "All selected games have either already started or ended. No upcoming matches left to book.", [], skipped_teams
 
+    # Send only valid, upcoming matches to SportyBet
     url = f"{SPORTYBET_API_BASE}/orders/share"
     try:
         res = requests.post(url, headers=HEADERS, json={"outcomes": sporty_outcomes}, timeout=8)
@@ -124,12 +130,12 @@ def generate_sportybet_code(legs):
             data = res.json()
             code = data.get("data", {}).get("shareCode")
             if code:
-                return str(code).upper(), None, booked_teams
+                return str(code).upper(), None, booked_teams, skipped_teams
             else:
-                return None, data.get("message", "SportyBet rejected the selection parameters."), booked_teams
+                return None, data.get("message", "SportyBet rejected the ticket."), booked_teams, skipped_teams
         elif res.status_code == 403:
-            return None, "SportyBet rate limit. Wait 20 seconds and click again.", booked_teams
+            return None, "SportyBet rate limit. Wait 15 seconds and try again.", booked_teams, skipped_teams
         else:
-            return None, f"SportyBet server error HTTP {res.status_code}", booked_teams
+            return None, f"SportyBet error HTTP {res.status_code}", booked_teams, skipped_teams
     except Exception as e:
-        return None, f"Network timeout: {str(e)}", booked_teams
+        return None, f"Network timeout: {str(e)}", booked_teams, skipped_teams
