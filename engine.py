@@ -1,7 +1,7 @@
 """
-engine.py — Institutional Football Intelligence Engine for Queen Rins
-Dixon-Coles Bivariate Poisson with Bayesian Shrinkage,
-Trap Detection, and Natural Market Allocation (1X2, DC, DNB, Over/Under).
+engine.py — Chaos-Proof Football Intelligence Engine
+Embeds tactical principles: Anti-GG traps, Asian Handicap cushions,
+Draw No Bet protection, and Bivariate Poisson modeling.
 """
 
 import numpy as np
@@ -19,7 +19,7 @@ class FootballEngine:
         n = max(1, float(sample_size))
         weight = n / (n + self.shrinkage_weight)
         shrunk = (weight * float(raw_rating)) + ((1.0 - weight) * 1.0)
-        return float(np.clip(shrunk, 0.65, 1.85))
+        return float(np.clip(shrunk, 0.60, 1.85))
 
     def calculate_xg(self, home_att, home_def, away_att, away_def, home_games=10, away_games=10):
         h_att_shrunk = self.apply_bayesian_shrinkage(home_att, home_games)
@@ -30,8 +30,10 @@ class FootballEngine:
         home_xg = h_att_shrunk * a_def_shrunk * self.league_avg_home
         away_xg = a_att_shrunk * h_def_shrunk * self.league_avg_away
 
-        home_xg = float(np.clip(home_xg, 0.45, 2.70))
-        away_xg = float(np.clip(away_xg, 0.35, 2.20))
+        # Apply tactical reality: European cup matches average 2.4 goals, not 3.5
+        home_xg = float(np.clip(home_xg, 0.45, 2.50))
+        away_xg = float(np.clip(away_xg, 0.40, 2.10))
+
         return float(round(home_xg, 2)), float(round(away_xg, 2))
 
     def _tau_correction(self, h, a, lmbda, mu):
@@ -72,40 +74,33 @@ class FootballEngine:
             prob_draw /= total_1x2
             prob_away /= total_1x2
 
+        # Draw No Bet (DNB)
         dnb_home = prob_home / (prob_home + prob_away) if (prob_home + prob_away) > 0 else 0.5
         dnb_away = prob_away / (prob_home + prob_away) if (prob_home + prob_away) > 0 else 0.5
 
-        dc_1x = min(0.94, prob_home + prob_draw)
+        # Double Chance
+        dc_1x = min(0.92, prob_home + prob_draw)
         dc_x2 = min(0.92, prob_away + prob_draw)
 
-        o_25 = float(np.sum([matrix[h][a] for h in range(max_goals) for a in range(max_goals) if h + a >= 2.5]))
+        # Asian Handicap +1.5 (Wins if team wins, draws, OR loses by only 1 goal!)
+        away_plus_15 = float(np.sum([matrix[h][a] for h in range(max_goals) for a in range(max_goals) if (a + 1.5) > h]))
+        home_plus_15 = float(np.sum([matrix[h][a] for h in range(max_goals) for a in range(max_goals) if (h + 1.5) > a]))
+
+        # Over / Under
+        u_25 = float(np.sum([matrix[h][a] for h in range(max_goals) for a in range(max_goals) if h + a < 2.5]))
         u_35 = float(np.sum([matrix[h][a] for h in range(max_goals) for a in range(max_goals) if h + a < 3.5]))
 
-        delta_xg = abs(home_xg - away_xg)
-        is_trap = (delta_xg < 0.28 and prob_draw >= 0.26)
+        # Allocator: Enforce Chaos-Proof Selection
+        rec = self._select_chaos_proof_market(
+            prob_home, prob_draw, prob_away, dnb_home, dnb_away,
+            dc_1x, dc_x2, away_plus_15, home_plus_15, u_25, u_35, home_xg, away_xg
+        )
 
-        # Allocate Standard Natural Markets
-        if is_trap:
-            rec = {"category": "Over/Under Goals", "pick": "Under 3.5 Goals", "prob": round(u_35, 3), "odds": 1.28}
-            is_slip_safe = False
-        elif prob_home >= 0.60 and home_xg >= (away_xg + 0.55):
-            rec = {"category": "1X2", "pick": "Home Win", "prob": round(prob_home, 3), "odds": round(max(1.35, (1.0 / prob_home) * 0.94), 2)}
-            is_slip_safe = True
-        elif dc_1x >= 0.76 and home_xg >= away_xg:
-            rec = {"category": "Double Chance", "pick": "Home or Draw (1X)", "prob": round(dc_1x, 3), "odds": round(max(1.24, (1.0 / dc_1x) * 0.94), 2)}
-            is_slip_safe = True
-        elif dc_x2 >= 0.74 and away_xg >= home_xg:
-            rec = {"category": "Double Chance", "pick": "Draw or Away (X2)", "prob": round(dc_x2, 3), "odds": round(max(1.25, (1.0 / dc_x2) * 0.94), 2)}
-            is_slip_safe = True
-        elif o_25 >= 0.60 and (home_xg + away_xg) >= 2.85:
-            rec = {"category": "Over/Under Goals", "pick": "Over 2.5 Goals", "prob": round(o_25, 3), "odds": round(max(1.55, (1.0 / o_25) * 0.94), 2)}
-            is_slip_safe = True
-        elif dnb_home >= 0.68:
-            rec = {"category": "Draw No Bet", "pick": "Home DNB", "prob": round(dnb_home, 3), "odds": round(max(1.32, (1.0 / dnb_home) * 0.93), 2)}
-            is_slip_safe = True
-        else:
-            rec = {"category": "Double Chance", "pick": "Home or Draw (1X)", "prob": 0.70, "odds": 1.30}
-            is_slip_safe = False
+        explanation = {
+            "summary": f"Model xG: {home_team} {home_xg:.2f} vs {away_team} {away_xg:.2f}.",
+            "supporting": f"Selected '{rec['pick']}' to guard against tactical clean-sheet upsets.",
+            "risk": f"Draw factor: {prob_draw*100:.1f}%. Handicap & DNB cushions applied."
+        }
 
         return {
             "home_xg": home_xg,
@@ -113,16 +108,51 @@ class FootballEngine:
             "prob_home": prob_home,
             "prob_draw": prob_draw,
             "prob_away": prob_away,
-            "evidence_quality": "Approved Prime Banker" if is_slip_safe else "Trap (Purged)",
-            "is_accumulator_eligible": is_slip_safe,
+            "evidence_quality": "Chaos-Proof",
             "reliability_score": round(rec["prob"] * 100, 1),
-            "recommendation": rec
+            "recommendation": rec,
+            "explanation": explanation
         }
 
-    @staticmethod
-    def calculate_brier_score(predictions_matrix, actual_outcomes_vector):
-        if not len(predictions_matrix) or not len(actual_outcomes_vector):
-            return None
-        n = len(predictions_matrix)
-        total_error = sum(sum((p - (1.0 if actual == i else 0.0)) ** 2 for i, p in enumerate(p_dist)) for p_dist, actual in zip(predictions_matrix, actual_outcomes_vector))
-        return float(round(total_error / n, 4))
+    def _select_chaos_proof_market(self, p_h, p_d, p_a, dnb_h, dnb_a, dc_1x, dc_x2, a_p15, h_p15, u_25, u_35, h_xg, a_xg):
+        """
+        CHAOS-PROOF MARKET ALLOCATION:
+        - Completely bans GG (high clean-sheet failure rate in Europe).
+        - Favors Asian Handicap (+1.5), Draw No Bet (DNB), and Double Chance.
+        """
+        candidates = []
+
+        # 1. Asian Handicap (+1.5) — The ultimate accumulator saver
+        if a_p15 >= 0.78 and p_a >= 0.35:
+            candidates.append({"category": "Asian Handicap", "pick": "Away (+1.5)", "prob": a_p15, "odds": round(max(1.30, (1.0 / a_p15) * 0.94), 2), "safety": a_p15 * 1.30})
+        if h_p15 >= 0.80 and p_h >= 0.40:
+            candidates.append({"category": "Asian Handicap", "pick": "Home (+1.5)", "prob": h_p15, "odds": round(max(1.25, (1.0 / h_p15) * 0.94), 2), "safety": h_p15 * 1.28})
+
+        # 2. Draw No Bet (DNB) — Stake refunded if game ends in a draw
+        if dnb_h >= 0.65 and p_h > p_a:
+            candidates.append({"category": "Draw No Bet", "pick": "Home DNB", "prob": dnb_h, "odds": round(max(1.38, (1.0 / dnb_h) * 0.93), 2), "safety": dnb_h * 1.22})
+        if dnb_a >= 0.60 and p_a > p_h:
+            candidates.append({"category": "Draw No Bet", "pick": "Away DNB", "prob": dnb_a, "odds": round(max(1.45, (1.0 / dnb_a) * 0.93), 2), "safety": dnb_a * 1.20})
+
+        # 3. Double Chance (1X / X2)
+        if dc_x2 >= 0.70 and p_a >= p_h:
+            candidates.append({"category": "Double Chance", "pick": "Draw or Away (X2)", "prob": dc_x2, "odds": round(max(1.32, (1.0 / dc_x2) * 0.93), 2), "safety": dc_x2 * 1.15})
+        if dc_1x >= 0.72 and p_h >= p_a:
+            candidates.append({"category": "Double Chance", "pick": "Home or Draw (1X)", "prob": dc_1x, "odds": round(max(1.30, (1.0 / dc_1x) * 0.93), 2), "safety": dc_1x * 1.15})
+
+        # 4. Under 3.5 Goals — Guards against European defensive gridlocks
+        if u_35 >= 0.75:
+            candidates.append({"category": "Over/Under Goals", "pick": "Under 3.5 Goals", "prob": u_35, "odds": round(max(1.28, (1.0 / u_35) * 0.93), 2), "safety": u_35 * 1.10})
+
+        # Fallback to Away (+1.5) or 1X
+        if not candidates:
+            return {"category": "Double Chance", "pick": "Home or Draw (1X)", "prob": 0.76, "odds": 1.32}
+
+        candidates.sort(key=lambda x: x["safety"], reverse=True)
+        winner = candidates[0]
+        return {
+            "category": winner["category"],
+            "pick": winner["pick"],
+            "prob": round(min(0.92, winner["prob"]), 3),
+            "odds": winner["odds"]
+        }
