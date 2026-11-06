@@ -1,7 +1,7 @@
 """
-engine.py — Realistic Football Prediction Engine for Queen Rins
-Kills Over 2.5 goal spam. Accurately profiles defensive teams,
-routes low-scoring fixtures to Under 3.5, DNB, and Double Chance.
+engine.py — High-Yield Prediction Engine for Queen Rins
+DNB (Draw No Bet) permanently banned and removed.
+Only allocates high-hit-rate markets: Home Win, Away Win, 1X, X2, and Under 3.5.
 """
 
 import numpy as np
@@ -30,7 +30,6 @@ class FootballEngine:
         home_xg = h_att_shrunk * a_def_shrunk * self.league_avg_home
         away_xg = a_att_shrunk * h_def_shrunk * self.league_avg_away
 
-        # Enforce realistic match ceilings
         home_xg = float(np.clip(home_xg, 0.40, 2.65))
         away_xg = float(np.clip(away_xg, 0.30, 2.15))
 
@@ -74,30 +73,27 @@ class FootballEngine:
             prob_draw /= total_1x2
             prob_away /= total_1x2
 
-        dnb_home = prob_home / (prob_home + prob_away) if (prob_home + prob_away) > 0 else 0.5
-        dnb_away = prob_away / (prob_home + prob_away) if (prob_home + prob_away) > 0 else 0.5
-
+        # Double Chance: pays out as WON on win OR draw
         dc_1x = min(0.94, prob_home + prob_draw)
         dc_x2 = min(0.92, prob_away + prob_draw)
 
-        # Exact Under / Over probabilities
         u_25 = float(np.sum([matrix[h][a] for h in range(max_goals) for a in range(max_goals) if h + a < 2.5]))
         o_25 = 1.0 - u_25
         u_35 = float(np.sum([matrix[h][a] for h in range(max_goals) for a in range(max_goals) if h + a < 3.5]))
 
-        # Diverse Market Selector: strictly avoids spamming any single market
-        rec = self._select_balanced_market(
-            prob_home, prob_draw, prob_away, dnb_home, dnb_away,
-            dc_1x, dc_x2, o_25, u_25, u_35, home_xg, away_xg
+        # High-Hit-Rate Allocation (ZERO DNB)
+        rec = self._select_pure_banker_market(
+            prob_home, prob_draw, prob_away, dc_1x, dc_x2,
+            o_25, u_25, u_35, home_xg, away_xg
         )
 
         delta_xg = abs(home_xg - away_xg)
-        is_safe = not (delta_xg < 0.20 and prob_draw >= 0.28)
+        is_safe = not (delta_xg < 0.18 and prob_draw >= 0.28)
 
         explanation = {
-            "summary": f"xG: {home_team} {home_xg:.2f} vs {away_team} {away_xg:.2f} (Total {home_xg+away_xg:.2f}).",
-            "supporting": f"Selected '{rec['pick']}' to match tactical reality.",
-            "risk": f"Draw risk is {prob_draw*100:.1f}%."
+            "summary": f"xG: {home_team} {home_xg:.2f} vs {away_team} {away_xg:.2f}.",
+            "supporting": f"Selected '{rec['pick']}' with high probability cushion. Zero DNB risk.",
+            "risk": f"Draw probability: {prob_draw*100:.1f}%."
         }
 
         return {
@@ -113,20 +109,21 @@ class FootballEngine:
             "explanation": explanation
         }
 
-    def _select_balanced_market(self, p_h, p_d, p_a, dnb_h, dnb_a, dc_1x, dc_x2, o_25, u_25, u_35, h_xg, a_xg):
+    def _select_pure_banker_market(self, p_h, p_d, p_a, dc_1x, dc_x2, o_25, u_25, u_35, h_xg, a_xg):
         """
-        BALANCED MARKET ALLOCATION:
-        - Defensive teams (xG <= 2.45): Under 3.5 Goals, Home Win, or 1X/X2
-        - Dominant favorites: Straight Win (Home Win / Away Win)
-        - Open high-scoring games ONLY (xG >= 2.90): Over 2.5 Goals
+        STRICT MARKET ALLOCATION (NO DNB):
+        1. Clear Dominance -> Straight Win (Home Win / Away Win)
+        2. Tight / Defensive Match -> Under 3.5 Goals
+        3. Equal / Tactical Fixture -> Double Chance (1X or X2)
+        4. Shootouts ONLY -> Over 2.5
         """
         tot_xg = h_xg + a_xg
 
-        # 1. Clear Home Dominance (e.g. Mjällby vs Borac, Atalanta vs Kairat) -> Straight Home Win
+        # 1. Clear Home Dominance -> Straight Home Win
         if p_h >= 0.58 and h_xg >= (a_xg + 0.55):
             return {"category": "1X2", "pick": "Home Win", "prob": round(p_h, 3), "odds": round(max(1.42, (1.0 / p_h) * 0.94), 2)}
 
-        # 2. Defensive Gridlock (e.g. KuPS, Lincoln, Hearts) -> Under 3.5 Goals (Hits in 76%+ of games!)
+        # 2. Defensive Gridlock -> Under 3.5 Goals (Hits in 76%+ of matches)
         if tot_xg <= 2.45 and u_35 >= 0.72:
             return {"category": "Over/Under Goals", "pick": "Under 3.5 Goals", "prob": round(u_35, 3), "odds": round(max(1.26, (1.0 / u_35) * 0.94), 2)}
 
@@ -134,23 +131,15 @@ class FootballEngine:
         if p_a >= 0.54 and a_xg >= (h_xg + 0.45):
             return {"category": "1X2", "pick": "Away Win", "prob": round(p_a, 3), "odds": round(max(1.48, (1.0 / p_a) * 0.94), 2)}
 
-        # 4. Genuine High-Scoring Shootout ONLY (e.g. Ajax, Bayern) -> Over 2.5 Goals
+        # 4. Away Edge in Tough Fixture -> Draw or Away (X2) (Instead of Away DNB)
+        if p_a > p_h and dc_x2 >= 0.68:
+            return {"category": "Double Chance", "pick": "Draw or Away (X2)", "prob": round(dc_x2, 3), "odds": round(max(1.30, (1.0 / dc_x2) * 0.94), 2)}
+
+        # 5. Genuine High-Scoring Shootout Only -> Over 2.5 Goals
         if tot_xg >= 2.95 and o_25 >= 0.62 and h_xg >= 1.40 and a_xg >= 1.20:
             return {"category": "Over/Under Goals", "pick": "Over 2.5 Goals", "prob": round(o_25, 3), "odds": round(max(1.60, (1.0 / o_25) * 0.94), 2)}
 
-        # 5. Away Advantage in Tight Match (e.g. KuPS vs Gent) -> Draw or Away (X2) or Away DNB
-        if dnb_a >= 0.65 and p_a > p_h:
-            return {"category": "Draw No Bet", "pick": "Away DNB", "prob": round(dnb_a, 3), "odds": round(max(1.40, (1.0 / dnb_a) * 0.93), 2)}
-
-        # 6. Competitive Home Edge -> Home Draw No Bet (DNB)
-        if dnb_h >= 0.66 and p_h > p_a:
-            return {"category": "Draw No Bet", "pick": "Home DNB", "prob": round(dnb_h, 3), "odds": round(max(1.36, (1.0 / dnb_h) * 0.93), 2)}
-
-        # 7. Resilient Away Underdog -> Draw or Away (X2)
-        if dc_x2 >= 0.70 and p_a >= p_h:
-            return {"category": "Double Chance", "pick": "Draw or Away (X2)", "prob": round(dc_x2, 3), "odds": round(max(1.30, (1.0 / dc_x2) * 0.94), 2)}
-
-        # 8. Solid Home Buffer -> Home or Draw (1X)
+        # 6. Solid Home Edge -> Home or Draw (1X) (Instead of Home DNB)
         return {"category": "Double Chance", "pick": "Home or Draw (1X)", "prob": round(dc_1x, 3), "odds": round(max(1.25, (1.0 / dc_1x) * 0.94), 2)}
 
     @staticmethod
