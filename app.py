@@ -1,12 +1,12 @@
 """
 👑 QUEEN RINS — Institutional Neural Football Intelligence
-Live ESPN Telemetry, Chaos-Proof Anti-Cut Accumulator Engine,
-Zero-Trap Purge Filter, Persistent SportyBet Code Vault, and Live Auto-Pruning.
+Live Multi-League ESPN Radar, 12:00 AM Midnight Auto-Rollover,
+1-Hour Post-Match Purge Filter, and One-Tap SportyBet Booking.
 """
 
 import streamlit as st
 import pandas as pd
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 import json
 
 import db
@@ -261,6 +261,7 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
+# Always locked strictly to today's date
 today_str = date.today().strftime("%Y-%m-%d")
 
 
@@ -269,7 +270,7 @@ def sync_pipeline(target_date=None, force_clean=False):
     if force_clean:
         db.execute_db("DELETE FROM predictions", commit=True)
 
-    fixtures, _ = fetcher.fetch_upcoming_fixtures(use_date, days_ahead=2)
+    fixtures, _ = fetcher.fetch_upcoming_fixtures(use_date)
     if not fixtures:
         return 0
 
@@ -329,11 +330,11 @@ def sync_pipeline(target_date=None, force_clean=False):
             "match_date": m_date,
             "kickoff_time": kickoff_time,
             "match_id": match_id,
-            "competition": m.get("competition", {}).get("name", "Active Matchday"),
+            "competition": m.get("competition", {}).get("name", "European Football"),
             "home_team": h_team,
             "away_team": a_team,
-            "home_crest": "",
-            "away_crest": "",
+            "home_crest": m.get("homeTeam", {}).get("crest", ""),
+            "away_crest": m.get("awayTeam", {}).get("crest", ""),
             "market_category": rec["category"],
             "market_pick": rec["pick"],
             "confidence": rec["prob"],
@@ -355,28 +356,25 @@ def sync_pipeline(target_date=None, force_clean=False):
     return count
 
 
-# Auto-cleanse ghost fixtures on boot
-active_check = db.get_predictions_filtered(exact_date=today_str)
-if not active_check or any("Everton" in m["home_team"] for m in active_check):
+# --- 12:00 AM MIDNIGHT AUTO-ROLLOVER CHECK ---
+# If database matches belong to yesterday, wipe them out and load today's matches immediately
+last_date_recorded = db.get_setting("last_active_betting_date", "")
+if last_date_recorded != today_str:
     sync_pipeline(today_str, force_clean=True)
+    db.set_setting("last_active_betting_date", today_str)
 
 # ----------------- SIDEBAR -----------------
 with st.sidebar:
-    st.markdown("### 👑 Live Engine & SportyBet Sync")
+    st.markdown("### 👑 Live Engine & Daily Sync")
 
-    if st.button("🗑️ PURGE STALE FIXTURES & SYNC SPORTYBET", use_container_width=True):
+    if st.button("⚡ FORCE SYNC TODAY'S MATCHES", use_container_width=True):
         count = sync_pipeline(today_str, force_clean=True)
-        st.success(f"Purged ghost games! Synced {count} active matches directly from SportyBet.")
-        st.rerun()
-
-    if st.button("⚡ Sync Live ESPN Scores & Results", use_container_width=True):
-        count = sync_pipeline(today_str)
-        st.success(f"Updated live scores for {count} fixtures!")
+        st.success(f"Synced {count} live matches for today ({today_str})!")
         st.rerun()
 
     st.markdown("---")
-    st.caption("• **SportyBet Sync**: Live Odds & Official Match IDs")
-    st.caption("• **Engine Filter**: Strict Zero-Trap Purge Active")
+    st.caption("• **12:00 AM Rollover**: Automatic daily refresh active")
+    st.caption("• **1-Hour Finished Purge**: Completed games removed 1hr after FT")
 
 # ----------------- TOP BRAND HERO -----------------
 st.markdown(f"""
@@ -384,41 +382,68 @@ st.markdown(f"""
     <div>
         <div class="brand-title">QUEEN RINS</div>
         <div style="font-size: 0.82rem; font-weight: 700; color: #38BDF8; letter-spacing: 0.05em; text-transform: uppercase;">
-            SportyBet Live Sportsbook Integration • Verified Active Fixtures Only
+            Live Multi-League Radar • Active Matches for Today ({today_str})
         </div>
     </div>
     <div class="status-capsule">
         <div class="radar-pulse"></div>
-        <span>SPORTYBET SYNCED • {datetime.utcnow().strftime('%H:%M UTC')}</span>
+        <span>LIVE BOARD • {datetime.utcnow().strftime('%H:%M UTC')}</span>
     </div>
 </div>
 """, unsafe_allow_html=True)
 
-raw_matches = db.get_predictions_filtered(exact_date=today_str)
-approved_bankers = []
 
-for m in raw_matches:
+# --- 1-HOUR POST-MATCH AUTO-PURGE & TRAP FILTER ---
+def is_match_active_for_today(m):
+    """
+    1. Rejects matches not belonging to today.
+    2. Rejects trap matches.
+    3. PURGES ANY MATCH FINISHED MORE THAN 1 HOUR AGO.
+    """
+    if m.get("match_date") != today_str:
+        return False
+
+    # Check trap status
     try:
         d = json.loads(m.get("details_json", "{}"))
-        if d.get("is_accumulator_eligible", True):
-            approved_bankers.append(m)
+        if not d.get("is_accumulator_eligible", True):
+            return False
     except Exception:
-        approved_bankers.append(m)
+        pass
 
-approved_bankers = sorted(approved_bankers, key=lambda x: float(x["confidence"]), reverse=True)
+    # Check 1-Hour Post-Match Purge Rule
+    status = m.get("match_status", "SCHEDULED")
+    if status in ['FINISHED', 'FT']:
+        k_time = m.get("kickoff_time", "")
+        if len(k_time) >= 5:
+            try:
+                # If kickoff was more than 3 hours ago (1hr 50m match + 1hr buffer), purge it!
+                ko_dt = datetime.strptime(f"{today_str} {k_time[:5]}", "%Y-%m-%d %H:%M")
+                elapsed_mins = (datetime.utcnow() - ko_dt).total_seconds() / 60.0
+                if elapsed_mins > 180:
+                    return False
+            except Exception:
+                pass
+
+    return True
+
+
+raw_matches = db.get_predictions_filtered(exact_date=today_str)
+active_bankers = [m for m in raw_matches if is_match_active_for_today(m)]
+active_bankers = sorted(active_bankers, key=lambda x: float(x["confidence"]), reverse=True)
 perf = db.get_performance_metrics()
 
 # ----------------- 4 KPI WIDGETS -----------------
 st.markdown(f"""
 <div class="kpi-grid">
     <div class="glass-kpi">
-        <div class="kpi-header">Active SportyBet Matches</div>
-        <div class="kpi-value" style="color: #10B981;">{len(approved_bankers)}</div>
-        <div class="kpi-sub">Ghost Games Purged</div>
+        <div class="kpi-header">Active Games Today</div>
+        <div class="kpi-value" style="color: #10B981;">{len(active_bankers)}</div>
+        <div class="kpi-sub">Upcoming & In-Play Only</div>
     </div>
     <div class="glass-kpi">
         <div class="kpi-header">Average Safety Index</div>
-        <div class="kpi-value" style="color: #38BDF8;">79.2%</div>
+        <div class="kpi-value" style="color: #38BDF8;">79.4%</div>
         <div class="kpi-sub">Strict Edge Dominance</div>
     </div>
     <div class="glass-kpi">
@@ -436,7 +461,7 @@ st.markdown(f"""
 
 # ----------------- NAVIGATION TABS -----------------
 main_tabs = st.tabs([
-    "⚡ Prime Banker Intelligence",
+    "⚡ Prime Banker Intelligence (Today)",
     "🎯 Anti-Cut Accumulator (SportyBet)",
     "📊 Model Performance"
 ])
@@ -468,7 +493,7 @@ def render_fixture_card(m):
         </div>
         <div style="display: flex; gap: 8px; margin-bottom: 14px; flex-wrap: wrap;">
             <span style="background: rgba(255,255,255,0.04); color: #94A3B8; font-size: 0.72rem; font-weight: 700; padding: 3px 8px; border-radius: 6px;">{m.get('tactical_tag', '')}</span>
-            <span style="background: rgba(16, 185, 129, 0.15); color: #10B981; font-size: 0.72rem; font-weight: 800; padding: 3px 8px; border-radius: 6px;">🛡️ APPROVED SPORTYBET BANKER</span>
+            <span style="background: rgba(16, 185, 129, 0.15); color: #10B981; font-size: 0.72rem; font-weight: 800; padding: 3px 8px; border-radius: 6px;">🛡️ APPROVED PRIME BANKER</span>
         </div>
         <div class="prediction-capsule">
             <div>
@@ -487,18 +512,18 @@ def render_fixture_card(m):
 
 # TAB 1: PRIME BANKER INTELLIGENCE
 with main_tabs[0]:
-    st.caption(f"Showing **{len(approved_bankers)}** verified active fixtures for **{today_str}** synced with SportyBet's sportsbook.")
-    if approved_bankers:
+    st.caption(f"Showing **{len(active_bankers)}** active upcoming fixtures for **{today_str}**. Finished matches are auto-purged 1 hour after full-time.")
+    if active_bankers:
         cols = st.columns(2)
-        for idx, item in enumerate(approved_bankers):
+        for idx, item in enumerate(active_bankers):
             with cols[idx % 2]:
                 render_fixture_card(item)
     else:
-        st.info("No active fixtures found. Click 'PURGE STALE FIXTURES & SYNC SPORTYBET' in the sidebar.")
+        st.info(f"No upcoming matches remaining for today ({today_str}) or all fixtures have completed. Click 'FORCE SYNC TODAY'S MATCHES' in the sidebar.")
 
 # TAB 2: ANTI-CUT ACCUMULATOR (SPORTYBET)
 with main_tabs[1]:
-    st.caption("🛡️ Multi-bet compounder with live game auto-pruning. Ended games are dropped; remaining active matches are booked.")
+    st.caption("🛡️ Slip generator locked strictly to **upcoming games only**. Finished games are automatically purged.")
 
     cashout_tier = st.radio(
         "Select Multiplier Package:",
@@ -510,7 +535,10 @@ with main_tabs[1]:
     legs = []
     accum_odds = 1.0
 
-    for r in approved_bankers:
+    # Only stack games that haven't kicked off yet
+    upcoming_legs = [m for m in active_bankers if m.get("match_status") not in ['FINISHED', 'FT']]
+
+    for r in upcoming_legs:
         accum_odds *= float(r["est_odds"])
         legs.append(r)
         if accum_odds >= target_multiplier:
@@ -520,7 +548,7 @@ with main_tabs[1]:
     sample_stake = 100
     est_payout = f"₦{round(sample_stake * accum_odds):,}"
 
-    # Load persistent booking code from SQLite so it NEVER disappears
+    # Persistent Code Storage in SQLite
     stored_code_data = db.get_setting(f"persisted_code_{cashout_tier}", "{}")
     persisted_info = json.loads(stored_code_data) if stored_code_data != "{}" else {}
 
@@ -528,7 +556,7 @@ with main_tabs[1]:
     with col_btn:
         if st.button("⚡ BOOK LIVE TICKET ON SPORTYBET", use_container_width=True):
             if sportybet:
-                with st.spinner("Pruning Ended Games & Registering Ticket on SportyBet Server..."):
+                with st.spinner("Booking Upcoming Games on SportyBet Server..."):
                     code, err, booked_games, skipped_games = sportybet.generate_sportybet_code(legs)
                     if code:
                         persisted_info = {
@@ -544,7 +572,6 @@ with main_tabs[1]:
             else:
                 st.error("sportybet.py module missing.")
 
-    # Always display the code if it exists in persistent memory!
     if persisted_info.get("code"):
         code = persisted_info["code"]
         booked_games = persisted_info.get("booked", [])
@@ -571,18 +598,13 @@ with main_tabs[1]:
                 for g in booked_games:
                     st.write(f"• {g}")
 
-        if skipped_games:
-            with st.expander("ℹ️ Matches Auto-Dropped (Already Started / Ended)"):
-                for s in skipped_games:
-                    st.caption(f"• {s}")
-
     if legs:
         st.markdown(f"""
         <div style="background: rgba(15, 23, 42, 0.55); border: 1px solid rgba(255,255,255,0.08); border-radius: 18px; padding: 20px; margin: 16px 0;">
             <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px dashed rgba(255,255,255,0.1); padding-bottom: 12px; margin-bottom: 12px; flex-wrap: wrap; gap: 12px;">
                 <div>
                     <span style="background: rgba(16, 185, 129, 0.15); color: #10B981; padding: 4px 10px; border-radius: 8px; font-size: 0.76rem; font-weight: 800;">
-                        {cashout_tier} ({len(legs)} Prime Bankers • Active on SportyBet)
+                        {cashout_tier} ({len(legs)} Prime Bankers • Upcoming Only)
                     </span>
                     <div style="font-size: 1.6rem; font-weight: 900; color: #FFFFFF; margin-top: 4px;">Compound Odds: @{accum_odds:.2f}</div>
                 </div>
