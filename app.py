@@ -1,7 +1,7 @@
 """
-👑 QUEEN RINS — Next-Gen Institutional Football Intelligence
+👑 QUEEN RINS — Institutional Neural Football Intelligence
 Live ESPN Telemetry, Chaos-Proof Anti-Cut Accumulator Engine,
-Zero-Trap Purge Filter, and Real-Time SportyBet Server Booking.
+Zero-Trap Purge Filter, Database Auto-Cleanse, and Real-Time SportyBet Booking.
 """
 
 import streamlit as st
@@ -352,11 +352,19 @@ def sync_pipeline(target_date=None):
     return count
 
 
+# Auto-refresh database
 sync_pipeline(today_str)
 
 # ----------------- SIDEBAR -----------------
 with st.sidebar:
     st.markdown("### 👑 Live Score & Engine Matrix")
+    
+    if st.button("🗑️ Purge Stale Fixtures & Refresh Today", use_container_width=True):
+        db.execute_db("DELETE FROM predictions", commit=True)
+        count = sync_pipeline(today_str)
+        st.success(f"Purged old fixtures & synced {count} live matches!")
+        st.rerun()
+
     if st.button("⚡ Sync Live ESPN Scores & Results", use_container_width=True):
         count = sync_pipeline(today_str)
         st.success(f"Updated live scores for {count} fixtures!")
@@ -364,7 +372,7 @@ with st.sidebar:
 
     st.markdown("---")
     st.caption("• **Engine Filter**: Strict Zero-Trap Mode (Active)")
-    st.caption("• **SportyBet API**: Direct Server Order Dispatcher")
+    st.caption("• **SportyBet API**: Direct Live Server Booking")
 
 # ----------------- TOP BRAND HERO -----------------
 st.markdown(f"""
@@ -383,7 +391,6 @@ st.markdown(f"""
 """, unsafe_allow_html=True)
 
 # ----------------- STRICT PURGE FILTER -----------------
-# Completely purge all matches flagged as traps from the app
 raw_matches = db.get_predictions_filtered(exact_date=today_str)
 approved_bankers = []
 
@@ -515,12 +522,12 @@ with main_tabs[1]:
     with col_btn:
         if st.button("⚡ BOOK LIVE TICKET ON SPORTYBET", use_container_width=True):
             if sportybet:
-                with st.spinner("Connecting to SportyBet Server & Booking Real Slip..."):
+                with st.spinner("Searching SportyBet Active Markets & Registering Ticket..."):
                     code, err, booked_games = sportybet.generate_sportybet_code(legs)
                     if code:
                         st.session_state["real_sporty_code"] = code
                         st.session_state["booked_games"] = booked_games
-                        st.success(f"Official SportyBet Code Registered: {code}")
+                        st.success(f"Official SportyBet Ticket Registered: {code}")
                     else:
                         st.error(f"SportyBet Booking Notice: {err}")
             else:
@@ -543,7 +550,7 @@ with main_tabs[1]:
         """, unsafe_allow_html=True)
 
         if booked_games:
-            with st.expander("📋 Verified Games On This SportyBet Ticket"):
+            with st.expander(f"📋 Verified Games On This SportyBet Ticket ({len(booked_games)} matches)"):
                 for g in booked_games:
                     st.write(f"• {g}")
 
