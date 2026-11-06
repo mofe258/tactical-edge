@@ -1,7 +1,7 @@
 """
 👑 QUEEN RINS — Institutional Neural Football Intelligence
-Team-Specific Tactical Profiling, Over 2.5 Spam Ban,
-Realistic Multi-Market Distribution (Home Win, Under 3.5, DNB, 1X/X2).
+Zero DNB (Draw No Bet Banned), Double Chance & Under 3.5 Cushions,
+Team-Specific Tactical Profiling, and Real-Time Settlement Engine.
 """
 
 import streamlit as st
@@ -12,11 +12,6 @@ import json
 import db
 from engine import FootballEngine
 import fetcher
-
-try:
-    import sportybet
-except ImportError:
-    sportybet = None
 
 st.set_page_config(
     page_title="Queen Rins | Neural Football Intelligence",
@@ -292,18 +287,14 @@ def sync_pipeline(target_date=None, force_clean=False):
                 boom_status = "BOOM" if h_goals > a_goals else "LOST"
             elif "Away Win" in pick:
                 boom_status = "BOOM" if a_goals > h_goals else "LOST"
-            elif "Home DNB" in pick:
-                boom_status = "BOOM" if h_goals > a_goals else ("VOID" if h_goals == a_goals else "LOST")
-            elif "Away DNB" in pick:
-                boom_status = "BOOM" if a_goals > h_goals else ("VOID" if a_goals == h_goals else "LOST")
             elif "Home or Draw" in pick or "1X" in pick:
                 boom_status = "BOOM" if h_goals >= a_goals else "LOST"
             elif "Draw or Away" in pick or "X2" in pick:
                 boom_status = "BOOM" if a_goals >= h_goals else "LOST"
-            elif "Over 2.5" in pick:
-                boom_status = "BOOM" if tot > 2.5 else "LOST"
             elif "Under 3.5" in pick:
                 boom_status = "BOOM" if tot < 3.5 else "LOST"
+            elif "Over 2.5" in pick:
+                boom_status = "BOOM" if tot > 2.5 else "LOST"
             else:
                 boom_status = "BOOM" if tot >= 2 else "LOST"
 
@@ -337,22 +328,27 @@ def sync_pipeline(target_date=None, force_clean=False):
     return count
 
 
-# Automatically re-calibrate on startup if Over 2.5 was spammed
+# Automatically cleanse old DNB picks and Over 2.5 spam
 current_loaded = db.get_predictions_filtered()
-if not current_loaded or all("Over 2.5" in m["market_pick"] for m in current_loaded[:4]):
+needs_refresh = (
+    not current_loaded
+    or any("DNB" in m["market_pick"] for m in current_loaded)
+    or all("Over 2.5" in m["market_pick"] for m in current_loaded[:4])
+)
+if needs_refresh:
     sync_pipeline(today_str, force_clean=True)
 
 # ----------------- SIDEBAR -----------------
 with st.sidebar:
     st.markdown("### 👑 Live Engine & Daily Sync")
-    if st.button("⚡ RE-CALIBRATE ACTIVE FIXTURES", use_container_width=True):
+    if st.button("⚡ RE-CALIBRATE SLIPS (PURGE DNB)", use_container_width=True):
         count = sync_pipeline(today_str, force_clean=True)
-        st.success(f"Re-calibrated {count} fixtures with tactical profiles!")
+        st.success(f"Purged DNB! Re-calibrated {count} fixtures with 1X, X2, and Under 3.5!")
         st.rerun()
 
     st.markdown("---")
-    st.caption("• **Engine Rule**: Over 2.5 spam strictly banned")
-    st.caption("• **Market Coverage**: Home Win, Under 3.5, DNB, 1X/X2")
+    st.caption("• **Engine Rules**: DNB and Over 2.5 spam banned")
+    st.caption("• **Active Markets**: Home Win, Away Win, 1X, X2, Under 3.5")
 
 # ----------------- TOP BRAND HERO -----------------
 st.markdown(f"""
@@ -360,12 +356,12 @@ st.markdown(f"""
     <div>
         <div class="brand-title">QUEEN RINS</div>
         <div style="font-size: 0.82rem; font-weight: 700; color: #38BDF8; letter-spacing: 0.05em; text-transform: uppercase;">
-            Tactical Club Profiling Active • Realistic Market Allocation
+            Zero-DNB Active • High-Hit-Rate Banker Allocator
         </div>
     </div>
     <div class="status-capsule">
         <div class="radar-pulse"></div>
-        <span>CALIBRATED • {datetime.utcnow().strftime('%H:%M UTC')}</span>
+        <span>PURE BANKERS • {datetime.utcnow().strftime('%H:%M UTC')}</span>
     </div>
 </div>
 """, unsafe_allow_html=True)
@@ -373,6 +369,9 @@ st.markdown(f"""
 
 def is_valid_match(m):
     try:
+        # Strictly reject any DNB picks from reaching the screen
+        if "DNB" in m.get("market_pick", ""):
+            return False
         d = json.loads(m.get("details_json", "{}"))
         return d.get("is_accumulator_eligible", True)
     except Exception:
@@ -395,7 +394,7 @@ st.markdown(f"""
     <div class="glass-kpi">
         <div class="kpi-header">Average Safety Index</div>
         <div class="kpi-value" style="color: #38BDF8;">79.4%</div>
-        <div class="kpi-sub">Strict Edge Dominance</div>
+        <div class="kpi-sub">Double Chance & Under Cushions</div>
     </div>
     <div class="glass-kpi">
         <div class="kpi-header">Historical Accuracy</div>
@@ -412,8 +411,8 @@ st.markdown(f"""
 
 # ----------------- NAVIGATION TABS -----------------
 main_tabs = st.tabs([
-    "⚡ Tactical Banker Intelligence",
-    "🎯 Balanced Accumulator Slip",
+    "⚡ Pure Banker Intelligence",
+    "🎯 Boom Accumulator Slip",
     "📊 Model Performance"
 ])
 
@@ -444,7 +443,7 @@ def render_fixture_card(m):
         </div>
         <div style="display: flex; gap: 8px; margin-bottom: 14px; flex-wrap: wrap;">
             <span style="background: rgba(255,255,255,0.04); color: #94A3B8; font-size: 0.72rem; font-weight: 700; padding: 3px 8px; border-radius: 6px;">{m.get('tactical_tag', '')}</span>
-            <span style="background: rgba(16, 185, 129, 0.15); color: #10B981; font-size: 0.72rem; font-weight: 800; padding: 3px 8px; border-radius: 6px;">🛡️ TACTICALLY ALLOCATED</span>
+            <span style="background: rgba(16, 185, 129, 0.15); color: #10B981; font-size: 0.72rem; font-weight: 800; padding: 3px 8px; border-radius: 6px;">🛡️ ZERO-DNB BANKER</span>
         </div>
         <div class="prediction-capsule">
             <div>
@@ -461,9 +460,9 @@ def render_fixture_card(m):
     st.markdown(card_html, unsafe_allow_html=True)
 
 
-# TAB 1: TACTICAL BANKER INTELLIGENCE
+# TAB 1: PURE BANKERS
 with main_tabs[0]:
-    st.caption(f"Showing **{len(active_bankers)}** tactically profiled fixtures. Over 2.5 spam eliminated.")
+    st.caption(f"Showing **{len(active_bankers)}** pure banker fixtures. DNB and Over 2.5 spam permanently eliminated.")
     if active_bankers:
         cols = st.columns(2)
         for idx, item in enumerate(active_bankers):
@@ -474,7 +473,7 @@ with main_tabs[0]:
 
 # TAB 2: ACCUMULATOR SLIP
 with main_tabs[1]:
-    st.caption("🚀 Anti-cut compounder with diverse, high-probability markets (Home Win, Under 3.5, DNB, 1X/X2).")
+    st.caption("🚀 High-hit-rate compounder using winning markets (Home Win, Under 3.5, 1X, X2).")
 
     cashout_tier = st.radio(
         "Select Multiplier Package:",
@@ -501,14 +500,14 @@ with main_tabs[1]:
         <div style="background: rgba(15, 23, 42, 0.55); border: 1px solid rgba(255,255,255,0.08); border-radius: 18px; padding: 20px; margin: 16px 0;">
             <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px dashed rgba(255,255,255,0.1); padding-bottom: 12px; margin-bottom: 12px; flex-wrap: wrap; gap: 12px;">
                 <div>
-                    <span style="background: rgba(14, 165, 233, 0.15); color: #38BDF8; padding: 4px 10px; border-radius: 8px; font-size: 0.76rem; font-weight: 800;">
-                        {cashout_tier} ({len(legs)} Diversified Legs)
+                    <span style="background: rgba(16, 185, 129, 0.15); color: #10B981; padding: 4px 10px; border-radius: 8px; font-size: 0.76rem; font-weight: 800;">
+                        {cashout_tier} ({len(legs)} Diversified Legs • Zero DNB)
                     </span>
                     <div style="font-size: 1.6rem; font-weight: 900; color: #FFFFFF; margin-top: 4px;">Compound Odds: @{accum_odds:.2f}</div>
                 </div>
                 <div>
                     <div style="font-size: 0.72rem; color: #94A3B8; text-transform: uppercase; font-weight: 700;">Projected Payout (₦{sample_stake:,} Stake)</div>
-                    <div style="font-size: 1.8rem; font-weight: 900; color: #38BDF8;">{est_payout}</div>
+                    <div style="font-size: 1.8rem; font-weight: 900; color: #10B981;">{est_payout}</div>
                 </div>
             </div>
         </div>
