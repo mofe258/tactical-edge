@@ -1,7 +1,7 @@
 """
 👑 QUEEN RINS — Institutional Neural Football Intelligence
-Live Multi-League Feed, Dynamic Daily Schedule, Varied High-Yield Markets,
-and Crash-Proof Betslip Generator.
+Team-Specific Tactical Profiling, Over 2.5 Spam Ban,
+Realistic Multi-Market Distribution (Home Win, Under 3.5, DNB, 1X/X2).
 """
 
 import streamlit as st
@@ -12,6 +12,11 @@ import json
 import db
 from engine import FootballEngine
 import fetcher
+
+try:
+    import sportybet
+except ImportError:
+    sportybet = None
 
 st.set_page_config(
     page_title="Queen Rins | Neural Football Intelligence",
@@ -258,16 +263,16 @@ def sync_pipeline(target_date=None, force_clean=False):
         match_id = str(m.get("id"))
         utc_datetime_str = m.get("utcDate", "")
         m_date = utc_datetime_str[:10] if utc_datetime_str else use_date
-        kickoff_time = utc_datetime_str[11:16] + " UTC" if len(utc_datetime_str) >= 16 else "19:00 UTC"
+        kickoff_time = utc_datetime_str[11:16] + " UTC" if len(utc_datetime_str) >= 16 else "18:45 UTC"
 
         h_team = m["homeTeam"]["name"]
         a_team = m["awayTeam"]["name"]
 
         custom = m.get("_custom_ratings", {})
-        h_att = custom.get("h_att", 1.35)
-        h_def = custom.get("h_def", 1.05)
-        a_att = custom.get("a_att", 1.15)
-        a_def = custom.get("a_def", 1.20)
+        h_att = custom.get("h_att", 1.20)
+        h_def = custom.get("h_def", 1.00)
+        a_att = custom.get("a_att", 1.00)
+        a_def = custom.get("a_def", 1.15)
 
         h_xg, a_xg = engine.calculate_xg(h_att, h_def, a_att, a_def)
         match_analysis = engine.predict_full_match(h_xg, a_xg, h_team, a_team)
@@ -306,11 +311,11 @@ def sync_pipeline(target_date=None, force_clean=False):
             "match_date": m_date,
             "kickoff_time": kickoff_time,
             "match_id": match_id,
-            "competition": m.get("competition", {}).get("name", "Active Matchday"),
+            "competition": m.get("competition", {}).get("name", "European Football"),
             "home_team": h_team,
             "away_team": a_team,
-            "home_crest": m.get("homeTeam", {}).get("crest", ""),
-            "away_crest": m.get("awayTeam", {}).get("crest", ""),
+            "home_crest": "",
+            "away_crest": "",
             "market_category": rec["category"],
             "market_pick": rec["pick"],
             "confidence": rec["prob"],
@@ -332,22 +337,22 @@ def sync_pipeline(target_date=None, force_clean=False):
     return count
 
 
-# Automatically ensure today's live matches are loaded
+# Automatically re-calibrate on startup if Over 2.5 was spammed
 current_loaded = db.get_predictions_filtered()
-if not current_loaded or len(current_loaded) < 4:
+if not current_loaded or all("Over 2.5" in m["market_pick"] for m in current_loaded[:4]):
     sync_pipeline(today_str, force_clean=True)
 
 # ----------------- SIDEBAR -----------------
 with st.sidebar:
     st.markdown("### 👑 Live Engine & Daily Sync")
-    if st.button("⚡ FORCE SYNC TODAY'S MATCHES", use_container_width=True):
+    if st.button("⚡ RE-CALIBRATE ACTIVE FIXTURES", use_container_width=True):
         count = sync_pipeline(today_str, force_clean=True)
-        st.success(f"Synced {count} live matches for today!")
+        st.success(f"Re-calibrated {count} fixtures with tactical profiles!")
         st.rerun()
 
     st.markdown("---")
-    st.caption("• **Live Feed**: Premier League, La Liga, Serie A, Bundesliga, etc.")
-    st.caption("• **Market Diversity**: Straight Wins, Over 2.5, DNB, 1X/X2")
+    st.caption("• **Engine Rule**: Over 2.5 spam strictly banned")
+    st.caption("• **Market Coverage**: Home Win, Under 3.5, DNB, 1X/X2")
 
 # ----------------- TOP BRAND HERO -----------------
 st.markdown(f"""
@@ -355,18 +360,17 @@ st.markdown(f"""
     <div>
         <div class="brand-title">QUEEN RINS</div>
         <div style="font-size: 0.82rem; font-weight: 700; color: #38BDF8; letter-spacing: 0.05em; text-transform: uppercase;">
-            Live Multi-League Feed • Active Today ({today_str})
+            Tactical Club Profiling Active • Realistic Market Allocation
         </div>
     </div>
     <div class="status-capsule">
         <div class="radar-pulse"></div>
-        <span>LIVE RADAR • {datetime.utcnow().strftime('%H:%M UTC')}</span>
+        <span>CALIBRATED • {datetime.utcnow().strftime('%H:%M UTC')}</span>
     </div>
 </div>
 """, unsafe_allow_html=True)
 
 
-# Fetch all active matches
 def is_valid_match(m):
     try:
         d = json.loads(m.get("details_json", "{}"))
@@ -384,9 +388,9 @@ perf = db.get_performance_metrics()
 st.markdown(f"""
 <div class="kpi-grid">
     <div class="glass-kpi">
-        <div class="kpi-header">Active Games</div>
+        <div class="kpi-header">Active Fixtures</div>
         <div class="kpi-value" style="color: #10B981;">{len(active_bankers)}</div>
-        <div class="kpi-sub">Upcoming & In-Play</div>
+        <div class="kpi-sub">Profiled Individually</div>
     </div>
     <div class="glass-kpi">
         <div class="kpi-header">Average Safety Index</div>
@@ -408,8 +412,8 @@ st.markdown(f"""
 
 # ----------------- NAVIGATION TABS -----------------
 main_tabs = st.tabs([
-    "⚡ Active Matches & Predictions",
-    "🎯 Anti-Cut Banker Slips",
+    "⚡ Tactical Banker Intelligence",
+    "🎯 Balanced Accumulator Slip",
     "📊 Model Performance"
 ])
 
@@ -422,7 +426,7 @@ def render_fixture_card(m):
         f'<span style="background: rgba(16, 185, 129, 0.2); color: #10B981; border: 1px solid #10B981; font-size: 0.76rem; font-weight: 800; padding: 4px 10px; border-radius: 8px;">WON (FT)</span>' if m["boom_status"] == 'BOOM' else (
             f'<span style="background: rgba(239, 68, 68, 0.2); color: #F87171; border: 1px solid #EF4444; font-size: 0.76rem; font-weight: 800; padding: 4px 10px; border-radius: 8px;">LOST (FT)</span>' if m["boom_status"] == 'LOST' else (
                 f'<span style="background: rgba(239, 68, 68, 0.2); color: #F87171; border: 1px solid #EF4444; font-size: 0.76rem; font-weight: 800; padding: 4px 10px; border-radius: 8px;">🔴 LIVE {score_display}</span>' if is_live else
-                f'<span class="comp-pill">🕒 {m.get("kickoff_time", "19:00 UTC")}</span>'
+                f'<span class="comp-pill">🕒 {m.get("kickoff_time", "18:45 UTC")}</span>'
             )
         )
     )
@@ -440,7 +444,7 @@ def render_fixture_card(m):
         </div>
         <div style="display: flex; gap: 8px; margin-bottom: 14px; flex-wrap: wrap;">
             <span style="background: rgba(255,255,255,0.04); color: #94A3B8; font-size: 0.72rem; font-weight: 700; padding: 3px 8px; border-radius: 6px;">{m.get('tactical_tag', '')}</span>
-            <span style="background: rgba(16, 185, 129, 0.15); color: #10B981; font-size: 0.72rem; font-weight: 800; padding: 3px 8px; border-radius: 6px;">🛡️ APPROVED BANKER</span>
+            <span style="background: rgba(16, 185, 129, 0.15); color: #10B981; font-size: 0.72rem; font-weight: 800; padding: 3px 8px; border-radius: 6px;">🛡️ TACTICALLY ALLOCATED</span>
         </div>
         <div class="prediction-capsule">
             <div>
@@ -457,9 +461,9 @@ def render_fixture_card(m):
     st.markdown(card_html, unsafe_allow_html=True)
 
 
-# TAB 1: ACTIVE MATCHES
+# TAB 1: TACTICAL BANKER INTELLIGENCE
 with main_tabs[0]:
-    st.caption(f"Showing **{len(active_bankers)}** active matches currently open across major European leagues.")
+    st.caption(f"Showing **{len(active_bankers)}** tactically profiled fixtures. Over 2.5 spam eliminated.")
     if active_bankers:
         cols = st.columns(2)
         for idx, item in enumerate(active_bankers):
@@ -470,7 +474,7 @@ with main_tabs[0]:
 
 # TAB 2: ACCUMULATOR SLIP
 with main_tabs[1]:
-    st.caption("🚀 Anti-cut compounder with varied high-yield markets (Home Win, Over 2.5, DNB, 1X).")
+    st.caption("🚀 Anti-cut compounder with diverse, high-probability markets (Home Win, Under 3.5, DNB, 1X/X2).")
 
     cashout_tier = st.radio(
         "Select Multiplier Package:",
@@ -498,7 +502,7 @@ with main_tabs[1]:
             <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px dashed rgba(255,255,255,0.1); padding-bottom: 12px; margin-bottom: 12px; flex-wrap: wrap; gap: 12px;">
                 <div>
                     <span style="background: rgba(14, 165, 233, 0.15); color: #38BDF8; padding: 4px 10px; border-radius: 8px; font-size: 0.76rem; font-weight: 800;">
-                        {cashout_tier} ({len(legs)} Banker Legs)
+                        {cashout_tier} ({len(legs)} Diversified Legs)
                     </span>
                     <div style="font-size: 1.6rem; font-weight: 900; color: #FFFFFF; margin-top: 4px;">Compound Odds: @{accum_odds:.2f}</div>
                 </div>
@@ -516,7 +520,7 @@ with main_tabs[1]:
                 st.markdown(f"""
                 <div style="background: rgba(15, 23, 42, 0.4); border: 1px solid rgba(255,255,255,0.06); border-radius: 14px; padding: 14px 16px; margin-bottom: 10px; display: flex; justify-content: space-between; align-items: center;">
                     <div>
-                        <div style="font-size: 0.70rem; color: #64748B; font-weight: 700;">{leg['competition']} • {leg.get('kickoff_time', '19:00 UTC')}</div>
+                        <div style="font-size: 0.70rem; color: #64748B; font-weight: 700;">{leg['competition']} • {leg.get('kickoff_time', '18:45 UTC')}</div>
                         <div style="font-weight: 800; color: #FFFFFF; font-size: 0.95rem; margin-top: 2px;">{leg['home_team']} vs {leg['away_team']}</div>
                         <div style="color: #38BDF8; font-weight: 800; font-size: 0.88rem; margin-top: 3px;">⚡ {leg['market_pick']}</div>
                     </div>
