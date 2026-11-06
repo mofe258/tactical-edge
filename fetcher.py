@@ -1,12 +1,11 @@
 """
-fetcher.py — Always-On Dynamic Multi-League Engine for Queen Rins
-Queries live ESPN feeds. If external API returns 0 matches for any date,
-the Always-On Engine immediately deploys the active European slate.
-Zero blank screens. Games guaranteed every single day.
+fetcher.py — Live Real-Time Multi-League Match Radar
+Pulls today's actual active fixtures across European domestic & cup leagues.
+Zero weekend hardcoding. Strictly pulls the current active matchday.
 """
 
 import requests
-from datetime import datetime, date, timedelta
+from datetime import datetime, date
 
 ESPN_LEAGUES = [
     ("eng.1", "Premier League"),
@@ -14,10 +13,14 @@ ESPN_LEAGUES = [
     ("ita.1", "Serie A"),
     ("ger.1", "Bundesliga"),
     ("fra.1", "Ligue 1"),
-    ("uefa.champions", "UEFA Champions League"),
-    ("uefa.europa", "UEFA Europa League"),
-    ("uefa.europa.conf", "UEFA Conference League"),
-    ("eng.2", "EFL Championship")
+    ("eng.2", "Championship"),
+    ("uefa.champions", "Champions League"),
+    ("uefa.europa", "Europa League"),
+    ("uefa.europa.conf", "Conference League"),
+    ("por.1", "Primeira Liga"),
+    ("ned.1", "Eredivisie"),
+    ("tur.1", "Super Lig"),
+    ("sau.1", "Saudi Pro League")
 ]
 
 HEADERS = {
@@ -29,51 +32,18 @@ def get_api_key():
     return ""
 
 
-def get_guaranteed_daily_slate(target_date_str):
-    """
-    Guaranteed high-profile European matchday schedule with kickoff times
-    distributed throughout the day.
-    """
-    marquee_fixtures = [
-        {"id": "marq_01", "home": "Arsenal", "away": "Chelsea", "comp": "Premier League", "time": "12:30 UTC", "h_att": 1.70, "h_def": 0.80, "a_att": 1.35, "a_def": 1.15},
-        {"id": "marq_02", "home": "Manchester City", "away": "Tottenham", "comp": "Premier League", "time": "15:00 UTC", "h_att": 1.85, "h_def": 0.85, "a_att": 1.40, "a_def": 1.20},
-        {"id": "marq_03", "home": "Liverpool", "away": "Aston Villa", "comp": "Premier League", "time": "15:00 UTC", "h_att": 1.75, "h_def": 0.85, "a_att": 1.30, "a_def": 1.15},
-        {"id": "marq_04", "home": "Bayern Munich", "away": "Borussia Dortmund", "comp": "Bundesliga", "time": "17:30 UTC", "h_att": 1.90, "h_def": 0.90, "a_att": 1.50, "a_def": 1.25},
-        {"id": "marq_05", "home": "Real Madrid", "away": "Valencia", "comp": "La Liga", "time": "18:00 UTC", "h_att": 1.80, "h_def": 0.80, "a_att": 1.05, "a_def": 1.30},
-        {"id": "marq_06", "home": "Barcelona", "away": "Real Sociedad", "comp": "La Liga", "time": "18:30 UTC", "h_att": 1.85, "h_def": 0.85, "a_att": 1.15, "a_def": 1.20},
-        {"id": "marq_07", "home": "Juventus", "away": "AC Milan", "comp": "Serie A", "time": "19:45 UTC", "h_att": 1.45, "h_def": 0.80, "a_att": 1.40, "a_def": 0.95},
-        {"id": "marq_08", "home": "Inter Milan", "away": "Napoli", "comp": "Serie A", "time": "19:45 UTC", "h_att": 1.65, "h_def": 0.80, "a_att": 1.35, "a_def": 1.05},
-        {"id": "marq_09", "home": "Paris Saint-Germain", "away": "Marseille", "comp": "Ligue 1", "time": "20:00 UTC", "h_att": 1.85, "h_def": 0.85, "a_att": 1.25, "a_def": 1.20},
-        {"id": "marq_10", "home": "Sporting CP", "away": "Benfica", "comp": "Primeira Liga", "time": "20:30 UTC", "h_att": 1.60, "h_def": 0.90, "a_att": 1.50, "a_def": 1.00}
-    ]
-
-    built = []
-    for item in marquee_fixtures:
-        built.append({
-            "id": item["id"],
-            "sporty_event_id": item["id"],
-            "utcDate": f"{target_date_str}T{item['time'][:5]}:00Z",
-            "status": "SCHEDULED",
-            "competition": {"name": item["comp"], "code": "ECL"},
-            "homeTeam": {"id": f"h_{item['id']}", "name": item["home"], "crest": ""},
-            "awayTeam": {"id": f"a_{item['id']}", "name": item["away"], "crest": ""},
-            "score": {"fullTime": {"home": None, "away": None}},
-            "_custom_ratings": {
-                "h_att": item["h_att"], "h_def": item["h_def"],
-                "a_att": item["a_att"], "a_def": item["a_def"]
-            }
-        })
-    return built
-
-
 def fetch_upcoming_fixtures(target_date_str, days_ahead=1):
-    date_clean = target_date_str.replace("-", "")
+    """
+    Fetches real matches playing today from ESPN's global scoreboard.
+    """
     all_fixtures = []
     seen_ids = set()
+    today_clean = target_date_str.replace("-", "")
 
-    # 1. Try Live ESPN Feeds
+    # 1. Pull active scoreboard for each league
     for league_slug, league_name in ESPN_LEAGUES:
-        url = f"https://site.api.espn.com/apis/site/v2/sports/soccer/{league_slug}/scoreboard?dates={date_clean}"
+        # Querying without hardcoded date returns the current active matchday
+        url = f"https://site.api.espn.com/apis/site/v2/sports/soccer/{league_slug}/scoreboard"
         try:
             res = requests.get(url, headers=HEADERS, timeout=4)
             if res.status_code == 200:
@@ -82,7 +52,6 @@ def fetch_upcoming_fixtures(target_date_str, days_ahead=1):
                     event_id = str(event.get("id"))
                     if event_id in seen_ids:
                         continue
-                    seen_ids.add(event_id)
 
                     comp = event.get("competitions", [{}])[0]
                     competitors = comp.get("competitors", [])
@@ -94,25 +63,25 @@ def fetch_upcoming_fixtures(target_date_str, days_ahead=1):
 
                     h_name = h_comp.get("team", {}).get("name", "Home")
                     a_name = a_comp.get("team", {}).get("name", "Away")
+
+                    # Match timing
+                    event_utc = event.get("date", "")
+                    match_date = event_utc[:10] if len(event_utc) >= 10 else target_date_str
+                    kickoff_time = event_utc[11:16] + " UTC" if len(event_utc) >= 16 else "19:00 UTC"
+
+                    # Status
+                    status_info = event.get("status", {}).get("type", {})
+                    state = status_info.get("state", "pre")
+                    status = "FINISHED" if state == "post" else ("LIVE" if state == "in" else "SCHEDULED")
+
                     h_score = h_comp.get("score")
                     a_score = a_comp.get("score")
 
-                    status_info = event.get("status", {}).get("type", {})
-                    state = status_info.get("state", "pre")
-
-                    if state == "post":
-                        status = "FINISHED"
-                    elif state == "in":
-                        status = "LIVE"
-                    else:
-                        status = "SCHEDULED"
-
-                    utc_date = event.get("date", f"{target_date_str}T18:00:00Z")
-
+                    seen_ids.add(event_id)
                     all_fixtures.append({
                         "id": f"espn_{event_id}",
                         "sporty_event_id": f"espn_{event_id}",
-                        "utcDate": utc_date,
+                        "utcDate": f"{match_date}T{kickoff_time[:5]}:00Z",
                         "status": status,
                         "competition": {"name": league_name, "code": league_slug},
                         "homeTeam": {"id": f"h_{event_id}", "name": h_name, "crest": ""},
@@ -123,21 +92,14 @@ def fetch_upcoming_fixtures(target_date_str, days_ahead=1):
                                 "away": int(a_score) if (a_score is not None and str(a_score).isdigit()) else None
                             }
                         },
-                        "_custom_ratings": {"h_att": 1.35, "h_def": 1.00, "a_att": 1.15, "a_def": 1.15}
+                        "_custom_ratings": {"h_att": 1.35, "h_def": 1.05, "a_att": 1.15, "a_def": 1.20}
                     })
         except Exception:
             continue
 
     from db import set_setting
-
-    # 2. Always-On Fallback: If external API returned 0 games, deploy guaranteed match slate!
-    if not all_fixtures or len(all_fixtures) < 3:
-        all_fixtures = get_guaranteed_daily_slate(target_date_str)
-        set_setting("sync_status", f"Always-On Matchday Active ({target_date_str})")
-    else:
-        set_setting("sync_status", f"ESPN Live Board Synced ({len(all_fixtures)} Matches)")
-
     set_setting("last_successful_sync", datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC"))
+    set_setting("sync_status", f"Synced {len(all_fixtures)} Active Matches")
     return all_fixtures, None
 
 
