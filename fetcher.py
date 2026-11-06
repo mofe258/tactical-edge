@@ -1,22 +1,29 @@
 """
-fetcher.py — Live SportyBet & ESPN Real-Time Match Catalog Ingestor
-Directly queries SportyBet's active sportsbook to ensure every match
-actually exists on SportyBet right now.
+fetcher.py — Dynamic Real-Time Multi-League ESPN Radar
+Pulls today's live matches across Premier League, La Liga, Serie A,
+Bundesliga, Ligue 1, UEFA, Championship, etc.
+Zero hardcoded games. Strictly dynamically fetched for today's date.
 """
 
 import requests
-import json
 from datetime import datetime, date
 
-SPORTYBET_API_BASE = "https://www.sportybet.com/api/ng"
+ESPN_LEAGUES = [
+    ("eng.1", "Premier League"),
+    ("esp.1", "La Liga"),
+    ("ita.1", "Serie A"),
+    ("ger.1", "Bundesliga"),
+    ("fra.1", "Ligue 1"),
+    ("uefa.champions", "UEFA Champions League"),
+    ("uefa.europa", "UEFA Europa League"),
+    ("uefa.europa.conf", "UEFA Conference League"),
+    ("eng.2", "EFL Championship"),
+    ("ned.1", "Eredivisie"),
+    ("por.1", "Primeira Liga")
+]
+
 HEADERS = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
-    "Accept": "application/json, text/plain, */*",
-    "Content-Type": "application/json;charset=UTF-8",
-    "Origin": "https://www.sportybet.com",
-    "Referer": "https://www.sportybet.com/ng/",
-    "operatingsystem": "pc",
-    "clientid": "wap"
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
 }
 
 
@@ -24,99 +31,76 @@ def get_api_key():
     return ""
 
 
-def fetch_sportybet_live_board():
+def fetch_upcoming_fixtures(target_date_str, days_ahead=1):
     """
-    Directly pulls active football fixtures currently open for betting on SportyBet.
+    Fetches real matches scheduled specifically for target_date_str from ESPN's global scoreboard.
     """
-    url = f"{SPORTYBET_API_BASE}/factsCenter/popularEvents"
-    params = {"sportId": "sr:sport:1"}
-    fixtures = []
+    # Format target_date_str (YYYY-MM-DD) to ESPN's format (YYYYMMDD)
+    date_clean = target_date_str.replace("-", "")
+    all_fixtures = []
+    seen_ids = set()
 
-    try:
-        res = requests.get(url, params=params, headers=HEADERS, timeout=8)
-        if res.status_code == 200:
-            events = res.json().get("data", [])
-            for ev in events:
-                event_id = ev.get("eventId")
-                h_name = ev.get("homeTeamName")
-                a_name = ev.get("awayTeamName")
-                comp_name = ev.get("sport", {}).get("category", {}).get("name", "Football")
+    for league_slug, league_name in ESPN_LEAGUES:
+        url = f"https://site.api.espn.com/apis/site/v2/sports/soccer/{league_slug}/scoreboard?dates={date_clean}"
+        try:
+            res = requests.get(url, headers=HEADERS, timeout=5)
+            if res.status_code == 200:
+                data = res.json()
+                for event in data.get("events", []):
+                    event_id = str(event.get("id"))
+                    if event_id in seen_ids:
+                        continue
+                    seen_ids.add(event_id)
 
-                # Timestamp to UTC kickoff
-                start_ts = ev.get("estimateStartTime", 0)
-                if start_ts:
-                    dt = datetime.utcfromtimestamp(start_ts / 1000.0)
-                    k_time = dt.strftime("%H:%M UTC")
-                    m_date = dt.strftime("%Y-%m-%d")
-                else:
-                    k_time = "18:45 UTC"
-                    m_date = date.today().strftime("%Y-%m-%d")
+                    comp = event.get("competitions", [{}])[0]
+                    competitors = comp.get("competitors", [])
+                    if len(competitors) < 2:
+                        continue
 
-                status_code = ev.get("status", 0)
-                status = "LIVE" if status_code == 1 else "SCHEDULED"
+                    h_comp = competitors[0] if competitors[0].get("homeAway") == "home" else competitors[1]
+                    a_comp = competitors[1] if competitors[1].get("homeAway") == "away" else competitors[0]
 
-                fixtures.append({
-                    "id": event_id,
-                    "sporty_event_id": event_id,
-                    "utcDate": f"{m_date}T{k_time[:5]}:00Z",
-                    "status": status,
-                    "competition": {"name": comp_name, "code": "LIVE"},
-                    "homeTeam": {"id": f"h_{event_id}", "name": h_name, "crest": ""},
-                    "awayTeam": {"id": f"a_{event_id}", "name": a_name, "crest": ""},
-                    "score": {"fullTime": {"home": None, "away": None}},
-                    "_custom_ratings": {"h_att": 1.25, "h_def": 1.00, "a_att": 1.10, "a_def": 1.15}
-                })
-    except Exception:
-        pass
+                    h_name = h_comp.get("team", {}).get("name", "Home")
+                    a_name = a_comp.get("team", {}).get("name", "Away")
+                    h_score = h_comp.get("score")
+                    a_score = a_comp.get("score")
 
-    return fixtures
+                    # Match status
+                    status_info = event.get("status", {}).get("type", {})
+                    state = status_info.get("state", "pre")  # "pre", "in", "post"
 
+                    if state == "post":
+                        status = "FINISHED"
+                    elif state == "in":
+                        status = "LIVE"
+                    else:
+                        status = "SCHEDULED"
 
-def fetch_upcoming_fixtures(start_date_str, days_ahead=2):
-    """
-    Ingests live SportyBet board first.
-    If network times out, merges today's active European fixtures.
-    """
+                    utc_date = event.get("date", f"{target_date_str}T18:00:00Z")
+
+                    all_fixtures.append({
+                        "id": f"espn_{event_id}",
+                        "sporty_event_id": f"espn_{event_id}",
+                        "utcDate": utc_date,
+                        "status": status,
+                        "competition": {"name": league_name, "code": league_slug},
+                        "homeTeam": {"id": f"h_{event_id}", "name": h_name, "crest": h_comp.get("team", {}).get("logo", "")},
+                        "awayTeam": {"id": f"a_{event_id}", "name": a_name, "crest": a_comp.get("team", {}).get("logo", "")},
+                        "score": {
+                            "fullTime": {
+                                "home": int(h_score) if (h_score is not None and str(h_score).isdigit()) else None,
+                                "away": int(a_score) if (a_score is not None and str(a_score).isdigit()) else None
+                            }
+                        },
+                        "_custom_ratings": {"h_att": 1.30, "h_def": 1.00, "a_att": 1.15, "a_def": 1.15}
+                    })
+        except Exception:
+            continue
+
     from db import set_setting
-    fixtures = fetch_sportybet_live_board()
-
-    # If SportyBet popular board returned games, use them directly
-    if fixtures and len(fixtures) >= 5:
-        set_setting("last_successful_sync", datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC"))
-        set_setting("sync_status", "SportyBet Live Board Synced")
-        return fixtures, None
-
-    # Fallback to verified active European match slate
-    verified_matches = [
-        {"id": "sr:match:51882001", "home": "Atalanta", "away": "Kairat", "time": "18:45 UTC", "h_att": 1.70, "h_def": 0.75, "a_att": 0.70, "a_def": 1.45},
-        {"id": "sr:match:51882002", "home": "Midtjylland", "away": "Ajax", "time": "18:45 UTC", "h_att": 1.30, "h_def": 1.15, "a_att": 1.55, "a_def": 1.10},
-        {"id": "sr:match:51882003", "home": "Crvena Zvezda", "away": "Inter d'Escaldes", "time": "18:45 UTC", "h_att": 1.55, "h_def": 0.80, "a_att": 0.70, "a_def": 1.40},
-        {"id": "sr:match:51882004", "home": "Gent", "away": "KuPS", "time": "18:45 UTC", "h_att": 1.40, "h_def": 0.90, "a_att": 0.90, "a_def": 1.20},
-        {"id": "sr:match:51882005", "home": "Braga", "away": "Aarhus", "time": "18:45 UTC", "h_att": 1.40, "h_def": 0.95, "a_att": 1.05, "a_def": 1.15},
-        {"id": "sr:match:51882006", "home": "Copenhagen", "away": "Saburtalo", "time": "21:00 UTC", "h_att": 1.65, "h_def": 0.75, "a_att": 0.65, "a_def": 1.45},
-        {"id": "sr:match:51882007", "home": "Monaco", "away": "Nordsjaelland", "time": "21:00 UTC", "h_att": 1.70, "h_def": 0.85, "a_att": 1.10, "a_def": 1.35},
-        {"id": "sr:match:51882008", "home": "Panathinaikos", "away": "CSKA Sofia", "time": "21:00 UTC", "h_att": 1.35, "h_def": 0.85, "a_att": 0.90, "a_def": 1.25},
-        {"id": "sr:match:51882009", "home": "Twente", "away": "Pafos", "time": "21:00 UTC", "h_att": 1.45, "h_def": 0.90, "a_att": 0.90, "a_def": 1.30},
-        {"id": "sr:match:51882010", "home": "Lugano", "away": "Zalgiris", "time": "21:00 UTC", "h_att": 1.40, "h_def": 0.95, "a_att": 0.80, "a_def": 1.40}
-    ]
-
-    fallback_fixtures = []
-    for item in verified_matches:
-        fallback_fixtures.append({
-            "id": item["id"],
-            "sporty_event_id": item["id"],
-            "utcDate": f"{start_date_str}T{item['time'][:5]}:00Z",
-            "status": "SCHEDULED",
-            "competition": {"name": "UEFA Conference League", "code": "ECL"},
-            "homeTeam": {"id": f"h_{item['id']}", "name": item["home"], "crest": ""},
-            "awayTeam": {"id": f"a_{item['id']}", "name": item["away"], "crest": ""},
-            "score": {"fullTime": {"home": None, "away": None}},
-            "_custom_ratings": {"h_att": item["h_att"], "h_def": item["h_def"], "a_att": item["a_att"], "a_def": item["a_def"]}
-        })
-
     set_setting("last_successful_sync", datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC"))
-    set_setting("sync_status", "Active Matchday Verified")
-    return fallback_fixtures, None
+    set_setting("sync_status", f"Synced {len(all_fixtures)} Live Matches for {target_date_str}")
+    return all_fixtures, None
 
 
 def fetch_standings(competition_code):
