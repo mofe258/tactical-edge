@@ -1,7 +1,7 @@
 """
 👑 QUEEN RINS — Institutional Neural Football Intelligence
-Football.com 1-Click Ticket Booking, Zero-Trap Purge Filter,
-Guaranteed Daily Match Engine, and Crash-Proof Generator.
+Live Multi-League Feed, Dynamic Daily Schedule, Varied High-Yield Markets,
+and Crash-Proof Betslip Generator.
 """
 
 import streamlit as st
@@ -12,7 +12,6 @@ import json
 import db
 from engine import FootballEngine
 import fetcher
-import football_com
 
 st.set_page_config(
     page_title="Queen Rins | Neural Football Intelligence",
@@ -208,25 +207,6 @@ st.markdown("""
         border-radius: 8px;
     }
 
-    .football-com-card {
-        background: radial-gradient(circle at 50% 0%, rgba(14, 165, 233, 0.25), rgba(8, 22, 45, 0.9) 75%);
-        border: 2px solid rgba(56, 189, 248, 0.6);
-        border-radius: 20px;
-        padding: 24px;
-        margin: 18px 0;
-        text-align: center;
-        box-shadow: 0 0 35px rgba(14, 165, 233, 0.25);
-    }
-    .booking-code-hero {
-        font-family: 'JetBrains Mono', monospace;
-        font-size: 3.4rem;
-        font-weight: 900;
-        color: #38BDF8;
-        letter-spacing: 0.15em;
-        margin: 6px 0;
-        text-shadow: 0 0 25px rgba(56, 189, 248, 0.5);
-    }
-
     .stTabs [data-baseweb="tab-list"] {
         gap: 8px;
         background: rgba(15, 23, 42, 0.6);
@@ -262,76 +242,112 @@ st.markdown("""
 today_str = date.today().strftime("%Y-%m-%d")
 
 
-def ensure_matches_loaded(target_date):
-    existing = db.get_predictions_filtered(exact_date=target_date)
-    if len(existing) >= 5:
-        return existing
+def sync_pipeline(target_date=None, force_clean=False):
+    use_date = target_date or today_str
+    if force_clean:
+        db.execute_db("DELETE FROM predictions", commit=True)
+
+    fixtures, _ = fetcher.fetch_upcoming_fixtures(use_date)
+    if not fixtures:
+        return 0
 
     engine = FootballEngine()
+    count = 0
 
-    slate = [
-        {"id": "fb_01", "home": "Manchester City", "away": "Tottenham", "comp": "Premier League", "time": "15:00 UTC", "h_att": 1.85, "h_def": 0.85, "a_att": 1.40, "a_def": 1.20},
-        {"id": "fb_02", "home": "Real Madrid", "away": "Valencia", "comp": "La Liga", "time": "18:00 UTC", "h_att": 1.80, "h_def": 0.80, "a_att": 1.05, "a_def": 1.30},
-        {"id": "fb_03", "home": "Bayern Munich", "away": "Borussia Dortmund", "comp": "Bundesliga", "time": "17:30 UTC", "h_att": 1.90, "h_def": 0.90, "a_att": 1.50, "a_def": 1.25},
-        {"id": "fb_04", "home": "Arsenal", "away": "Chelsea", "comp": "Premier League", "time": "12:30 UTC", "h_att": 1.70, "h_def": 0.80, "a_att": 1.35, "a_def": 1.15},
-        {"id": "fb_05", "home": "Liverpool", "away": "Aston Villa", "comp": "Premier League", "time": "15:00 UTC", "h_att": 1.75, "h_def": 0.85, "a_att": 1.30, "a_def": 1.15},
-        {"id": "fb_06", "home": "Barcelona", "away": "Real Sociedad", "comp": "La Liga", "time": "18:30 UTC", "h_att": 1.85, "h_def": 0.85, "a_att": 1.15, "a_def": 1.20},
-        {"id": "fb_07", "home": "Paris Saint-Germain", "away": "Marseille", "comp": "Ligue 1", "time": "20:00 UTC", "h_att": 1.85, "h_def": 0.85, "a_att": 1.25, "a_def": 1.20},
-        {"id": "fb_08", "home": "Inter Milan", "away": "Napoli", "comp": "Serie A", "time": "19:45 UTC", "h_att": 1.65, "h_def": 0.80, "a_att": 1.35, "a_def": 1.05},
-        {"id": "fb_09", "home": "Juventus", "away": "AC Milan", "comp": "Serie A", "time": "19:45 UTC", "h_att": 1.45, "h_def": 0.80, "a_att": 1.40, "a_def": 0.95},
-        {"id": "fb_10", "home": "Sporting CP", "away": "Benfica", "comp": "Primeira Liga", "time": "20:30 UTC", "h_att": 1.60, "h_def": 0.90, "a_att": 1.50, "a_def": 1.00}
-    ]
+    for m in fixtures:
+        match_id = str(m.get("id"))
+        utc_datetime_str = m.get("utcDate", "")
+        m_date = utc_datetime_str[:10] if utc_datetime_str else use_date
+        kickoff_time = utc_datetime_str[11:16] + " UTC" if len(utc_datetime_str) >= 16 else "19:00 UTC"
 
-    for item in slate:
-        h_xg, a_xg = engine.calculate_xg(item["h_att"], item["h_def"], item["a_att"], item["a_def"])
-        match_analysis = engine.predict_full_match(h_xg, a_xg, item["home"], item["away"])
+        h_team = m["homeTeam"]["name"]
+        a_team = m["awayTeam"]["name"]
+
+        custom = m.get("_custom_ratings", {})
+        h_att = custom.get("h_att", 1.35)
+        h_def = custom.get("h_def", 1.05)
+        a_att = custom.get("a_att", 1.15)
+        a_def = custom.get("a_def", 1.20)
+
+        h_xg, a_xg = engine.calculate_xg(h_att, h_def, a_att, a_def)
+        match_analysis = engine.predict_full_match(h_xg, a_xg, h_team, a_team)
         rec = match_analysis["recommendation"]
 
+        score_data = m.get("score", {}).get("fullTime", {})
+        h_goals = score_data.get("home")
+        a_goals = score_data.get("away")
+        status = m.get("status", "SCHEDULED")
+        score_str = f"{h_goals} - {a_goals}" if (h_goals is not None and a_goals is not None) else "vs"
+
+        boom_status = "PENDING"
+        if status in ['FINISHED', 'FT'] and h_goals is not None and a_goals is not None:
+            pick = rec["pick"]
+            tot = h_goals + a_goals
+            if "Home Win" in pick:
+                boom_status = "BOOM" if h_goals > a_goals else "LOST"
+            elif "Away Win" in pick:
+                boom_status = "BOOM" if a_goals > h_goals else "LOST"
+            elif "Home DNB" in pick:
+                boom_status = "BOOM" if h_goals > a_goals else ("VOID" if h_goals == a_goals else "LOST")
+            elif "Away DNB" in pick:
+                boom_status = "BOOM" if a_goals > h_goals else ("VOID" if a_goals == h_goals else "LOST")
+            elif "Home or Draw" in pick or "1X" in pick:
+                boom_status = "BOOM" if h_goals >= a_goals else "LOST"
+            elif "Draw or Away" in pick or "X2" in pick:
+                boom_status = "BOOM" if a_goals >= h_goals else "LOST"
+            elif "Over 2.5" in pick:
+                boom_status = "BOOM" if tot > 2.5 else "LOST"
+            elif "Under 3.5" in pick:
+                boom_status = "BOOM" if tot < 3.5 else "LOST"
+            else:
+                boom_status = "BOOM" if tot >= 2 else "LOST"
+
         db.save_or_update_prediction({
-            "match_date": target_date,
-            "kickoff_time": item["time"],
-            "match_id": item["id"],
-            "competition": item["comp"],
-            "home_team": item["home"],
-            "away_team": item["away"],
-            "home_crest": "",
-            "away_crest": "",
+            "match_date": m_date,
+            "kickoff_time": kickoff_time,
+            "match_id": match_id,
+            "competition": m.get("competition", {}).get("name", "Active Matchday"),
+            "home_team": h_team,
+            "away_team": a_team,
+            "home_crest": m.get("homeTeam", {}).get("crest", ""),
+            "away_crest": m.get("awayTeam", {}).get("crest", ""),
             "market_category": rec["category"],
             "market_pick": rec["pick"],
             "confidence": rec["prob"],
             "est_odds": rec["odds"],
             "tactical_tag": f"{h_xg:.2f} vs {a_xg:.2f} xG",
-            "evidence_quality": "Tier-1 Banker",
-            "match_status": "SCHEDULED",
-            "live_score": "vs",
-            "boom_status": "PENDING",
-            "full_time_home": None,
-            "full_time_away": None,
+            "evidence_quality": match_analysis["evidence_quality"],
+            "match_status": status,
+            "live_score": score_str,
+            "boom_status": boom_status,
+            "full_time_home": h_goals,
+            "full_time_away": a_goals,
             "prob_home": match_analysis["prob_home"],
             "prob_draw": match_analysis["prob_draw"],
             "prob_away": match_analysis["prob_away"],
             "details": match_analysis
         })
+        count += 1
 
-    return db.get_predictions_filtered(exact_date=target_date)
+    return count
 
 
-active_bankers = ensure_matches_loaded(today_str)
-active_bankers = sorted(active_bankers, key=lambda x: float(x["confidence"]), reverse=True)
-perf = db.get_performance_metrics()
+# Automatically ensure today's live matches are loaded
+current_loaded = db.get_predictions_filtered()
+if not current_loaded or len(current_loaded) < 4:
+    sync_pipeline(today_str, force_clean=True)
 
 # ----------------- SIDEBAR -----------------
 with st.sidebar:
-    st.markdown("### 👑 Football.com Center")
-    if st.button("⚡ FORCE SYNC MATCHDAY", use_container_width=True):
-        db.execute_db("DELETE FROM predictions", commit=True)
-        ensure_matches_loaded(today_str)
-        st.success("Refreshed active matchday!")
+    st.markdown("### 👑 Live Engine & Daily Sync")
+    if st.button("⚡ FORCE SYNC TODAY'S MATCHES", use_container_width=True):
+        count = sync_pipeline(today_str, force_clean=True)
+        st.success(f"Synced {count} live matches for today!")
         st.rerun()
 
     st.markdown("---")
-    st.caption("• **Platform**: Football.com (Nigeria / Africa)")
-    st.caption("• **Ticket Dispatch**: Direct API & 1-Click Fast Loader")
+    st.caption("• **Live Feed**: Premier League, La Liga, Serie A, Bundesliga, etc.")
+    st.caption("• **Market Diversity**: Straight Wins, Over 2.5, DNB, 1X/X2")
 
 # ----------------- TOP BRAND HERO -----------------
 st.markdown(f"""
@@ -339,23 +355,38 @@ st.markdown(f"""
     <div>
         <div class="brand-title">QUEEN RINS</div>
         <div style="font-size: 0.82rem; font-weight: 700; color: #38BDF8; letter-spacing: 0.05em; text-transform: uppercase;">
-            Football.com Booking Center • Active Matches ({today_str})
+            Live Multi-League Feed • Active Today ({today_str})
         </div>
     </div>
     <div class="status-capsule">
         <div class="radar-pulse"></div>
-        <span>FOOTBALL.COM CONNECTED • {datetime.utcnow().strftime('%H:%M UTC')}</span>
+        <span>LIVE RADAR • {datetime.utcnow().strftime('%H:%M UTC')}</span>
     </div>
 </div>
 """, unsafe_allow_html=True)
+
+
+# Fetch all active matches
+def is_valid_match(m):
+    try:
+        d = json.loads(m.get("details_json", "{}"))
+        return d.get("is_accumulator_eligible", True)
+    except Exception:
+        return True
+
+
+raw_matches = db.get_predictions_filtered()
+active_bankers = [m for m in raw_matches if is_valid_match(m)]
+active_bankers = sorted(active_bankers, key=lambda x: float(x["confidence"]), reverse=True)
+perf = db.get_performance_metrics()
 
 # ----------------- 4 KPI WIDGETS -----------------
 st.markdown(f"""
 <div class="kpi-grid">
     <div class="glass-kpi">
-        <div class="kpi-header">Active Games Today</div>
+        <div class="kpi-header">Active Games</div>
         <div class="kpi-value" style="color: #10B981;">{len(active_bankers)}</div>
-        <div class="kpi-sub">Upcoming European Slate</div>
+        <div class="kpi-sub">Upcoming & In-Play</div>
     </div>
     <div class="glass-kpi">
         <div class="kpi-header">Average Safety Index</div>
@@ -377,8 +408,8 @@ st.markdown(f"""
 
 # ----------------- NAVIGATION TABS -----------------
 main_tabs = st.tabs([
-    "⚡ Prime Banker Intelligence (Today)",
-    "🎯 Football.com Accumulator Slip",
+    "⚡ Active Matches & Predictions",
+    "🎯 Anti-Cut Banker Slips",
     "📊 Model Performance"
 ])
 
@@ -391,7 +422,7 @@ def render_fixture_card(m):
         f'<span style="background: rgba(16, 185, 129, 0.2); color: #10B981; border: 1px solid #10B981; font-size: 0.76rem; font-weight: 800; padding: 4px 10px; border-radius: 8px;">WON (FT)</span>' if m["boom_status"] == 'BOOM' else (
             f'<span style="background: rgba(239, 68, 68, 0.2); color: #F87171; border: 1px solid #EF4444; font-size: 0.76rem; font-weight: 800; padding: 4px 10px; border-radius: 8px;">LOST (FT)</span>' if m["boom_status"] == 'LOST' else (
                 f'<span style="background: rgba(239, 68, 68, 0.2); color: #F87171; border: 1px solid #EF4444; font-size: 0.76rem; font-weight: 800; padding: 4px 10px; border-radius: 8px;">🔴 LIVE {score_display}</span>' if is_live else
-                f'<span class="comp-pill">🕒 {m.get("kickoff_time", "18:45 UTC")}</span>'
+                f'<span class="comp-pill">🕒 {m.get("kickoff_time", "19:00 UTC")}</span>'
             )
         )
     )
@@ -399,7 +430,7 @@ def render_fixture_card(m):
     card_html = f"""
     <div class="match-deck-card">
         <div class="match-top-row">
-            <span class="comp-pill">{m['competition']}</span>
+            <span class="comp-pill">{m['competition']} • {m.get('match_date', today_str)}</span>
             {badge_html}
         </div>
         <div class="versus-row">
@@ -409,7 +440,7 @@ def render_fixture_card(m):
         </div>
         <div style="display: flex; gap: 8px; margin-bottom: 14px; flex-wrap: wrap;">
             <span style="background: rgba(255,255,255,0.04); color: #94A3B8; font-size: 0.72rem; font-weight: 700; padding: 3px 8px; border-radius: 6px;">{m.get('tactical_tag', '')}</span>
-            <span style="background: rgba(16, 185, 129, 0.15); color: #10B981; font-size: 0.72rem; font-weight: 800; padding: 3px 8px; border-radius: 6px;">🛡️ APPROVED PRIME BANKER</span>
+            <span style="background: rgba(16, 185, 129, 0.15); color: #10B981; font-size: 0.72rem; font-weight: 800; padding: 3px 8px; border-radius: 6px;">🛡️ APPROVED BANKER</span>
         </div>
         <div class="prediction-capsule">
             <div>
@@ -426,17 +457,20 @@ def render_fixture_card(m):
     st.markdown(card_html, unsafe_allow_html=True)
 
 
-# TAB 1: PRIME BANKER INTELLIGENCE
+# TAB 1: ACTIVE MATCHES
 with main_tabs[0]:
-    st.caption(f"Showing **{len(active_bankers)}** verified active fixtures for **{today_str}**.")
-    cols = st.columns(2)
-    for idx, item in enumerate(active_bankers):
-        with cols[idx % 2]:
-            render_fixture_card(item)
+    st.caption(f"Showing **{len(active_bankers)}** active matches currently open across major European leagues.")
+    if active_bankers:
+        cols = st.columns(2)
+        for idx, item in enumerate(active_bankers):
+            with cols[idx % 2]:
+                render_fixture_card(item)
+    else:
+        st.info("Loading active fixtures...")
 
-# TAB 2: FOOTBALL.COM ACCUMULATOR
+# TAB 2: ACCUMULATOR SLIP
 with main_tabs[1]:
-    st.caption("🚀 Anti-cut compounder with official **Football.com** ticket generation & 1-tap fast bet loader.")
+    st.caption("🚀 Anti-cut compounder with varied high-yield markets (Home Win, Over 2.5, DNB, 1X).")
 
     cashout_tier = st.radio(
         "Select Multiplier Package:",
@@ -458,66 +492,13 @@ with main_tabs[1]:
     sample_stake = 100
     est_payout = f"₦{round(sample_stake * accum_odds):,}"
 
-    # Persistent Storage in SQLite
-    stored_code_data = db.get_setting(f"fb_code_{cashout_tier}", "{}")
-    persisted_info = json.loads(stored_code_data) if stored_code_data != "{}" else {}
-
-    col_btn, _ = st.columns([2, 1])
-    with col_btn:
-        if st.button("⚡ GENERATE FOOTBALL.COM BOOKING CODE", use_container_width=True):
-            with st.spinner("Talking to Football.com Server..."):
-                res = football_com.generate_football_com_code(legs)
-                # Bulletproof unpack: guaranteed never to raise ValueError
-                code = res[0] if len(res) > 0 else None
-                direct_url = res[1] if len(res) > 1 else "https://www.football.com/ng/"
-                booked_games = res[2] if len(res) > 2 else []
-
-                persisted_info = {
-                    "code": code,
-                    "direct_url": direct_url,
-                    "booked": booked_games,
-                    "time": datetime.utcnow().strftime("%H:%M UTC")
-                }
-                db.set_setting(f"fb_code_{cashout_tier}", json.dumps(persisted_info))
-                if code:
-                    st.success(f"Official Football.com Ticket Registered: {code}")
-                else:
-                    st.info("Slip prepared! Use the 1-Click Fast Bet Loader below to place on Football.com instantly.")
-
-    booked_games = persisted_info.get("booked", [])
-    code = persisted_info.get("code")
-    direct_url = persisted_info.get("direct_url", "https://www.football.com/ng/")
-
-    if booked_games:
-        # Prepare Fast Bet text for 1-click clipboard copy
-        fast_bet_text = " | ".join([f"{g['fixture']} -> {g['pick']}" for g in booked_games])
-
-        st.markdown(f"""
-        <div class="football-com-card">
-            <div style="font-size: 0.8rem; font-weight: 800; color: #38BDF8; letter-spacing: 0.1em; text-transform: uppercase;">
-                Football.com Fast Bet Loader ({cashout_tier})
-            </div>
-            <div class="booking-code-hero">{code if code else 'ACTIVE TICKET'}</div>
-            <div style="color: #94A3B8; font-size: 0.88rem; font-weight: 600; margin-bottom: 14px;">
-                {f'Code: <b>{code}</b>' if code else 'Selections locked in vault'}
-            </div>
-            <a href="{direct_url}" target="_blank" style="display: inline-block; background: #0EA5E9; color: #FFFFFF; font-weight: 800; padding: 12px 28px; border-radius: 12px; text-decoration: none; font-size: 0.95rem; box-shadow: 0 4px 15px rgba(14, 165, 233, 0.4);">
-                🚀 Open Football.com & Place Bet
-            </a>
-        </div>
-        """, unsafe_allow_html=True)
-
-        with st.expander(f"📋 Verified Games On This Slip ({len(booked_games)} matches)"):
-            for g in booked_games:
-                st.write(f"• **{g['fixture']}** ➔ `{g['pick']}` (@{g['odds']})")
-
     if legs:
         st.markdown(f"""
         <div style="background: rgba(15, 23, 42, 0.55); border: 1px solid rgba(255,255,255,0.08); border-radius: 18px; padding: 20px; margin: 16px 0;">
             <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px dashed rgba(255,255,255,0.1); padding-bottom: 12px; margin-bottom: 12px; flex-wrap: wrap; gap: 12px;">
                 <div>
                     <span style="background: rgba(14, 165, 233, 0.15); color: #38BDF8; padding: 4px 10px; border-radius: 8px; font-size: 0.76rem; font-weight: 800;">
-                        {cashout_tier} ({len(legs)} Prime Bankers • Football.com)
+                        {cashout_tier} ({len(legs)} Banker Legs)
                     </span>
                     <div style="font-size: 1.6rem; font-weight: 900; color: #FFFFFF; margin-top: 4px;">Compound Odds: @{accum_odds:.2f}</div>
                 </div>
@@ -535,7 +516,7 @@ with main_tabs[1]:
                 st.markdown(f"""
                 <div style="background: rgba(15, 23, 42, 0.4); border: 1px solid rgba(255,255,255,0.06); border-radius: 14px; padding: 14px 16px; margin-bottom: 10px; display: flex; justify-content: space-between; align-items: center;">
                     <div>
-                        <div style="font-size: 0.70rem; color: #64748B; font-weight: 700;">{leg['competition']} • {leg['kickoff_time']}</div>
+                        <div style="font-size: 0.70rem; color: #64748B; font-weight: 700;">{leg['competition']} • {leg.get('kickoff_time', '19:00 UTC')}</div>
                         <div style="font-weight: 800; color: #FFFFFF; font-size: 0.95rem; margin-top: 2px;">{leg['home_team']} vs {leg['away_team']}</div>
                         <div style="color: #38BDF8; font-weight: 800; font-size: 0.88rem; margin-top: 3px;">⚡ {leg['market_pick']}</div>
                     </div>
