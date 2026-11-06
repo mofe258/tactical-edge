@@ -1,6 +1,6 @@
 """
-sportybet.py — Official SportyBet Live Event Validator & Booking Client
-Directly queries SportyBet's live sportsbook and registers official booking codes.
+sportybet.py — Official Direct SportyBet Order Dispatcher
+Books directly using SportyBet's pre-verified internal eventId.
 """
 
 import requests
@@ -8,7 +8,6 @@ import json
 import re
 
 SPORTYBET_API_BASE = "https://www.sportybet.com/api/ng"
-
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
     "Accept": "application/json, text/plain, */*",
@@ -20,42 +19,34 @@ HEADERS = {
 }
 
 
-def clean_team_name(name):
-    """Extracts the primary distinct team name for SportyBet's search engine."""
-    cleaned = re.sub(r'\b(FC|CF|SC|BC|KAA|FK|SK|VV|AIF|Kuopio|Almaty|Banja Luka|Midlothian|City|United)\b', '', name, flags=re.IGNORECASE)
-    cleaned = re.sub(r'\s+', ' ', cleaned).strip()
-    parts = cleaned.split()
-    return parts[0] if parts else name
+def clean_name(name):
+    cleaned = re.sub(r'\b(FC|CF|SC|BC|KAA|FK|SK|VV|AIF|City|United)\b', '', name, flags=re.IGNORECASE).strip()
+    return cleaned.split()[0] if cleaned else name
 
 
-def search_sportybet_event(team_name):
-    """Searches SportyBet for an active, open match on today's board."""
-    keyword = clean_team_name(team_name)
+def search_live_event_id(team_name):
+    """Finds live eventId on SportyBet."""
+    keyword = clean_name(team_name)
     url = f"{SPORTYBET_API_BASE}/factsCenter/pcOrTabletsSearch"
-    params = {"searchKey": keyword}
-
     try:
-        res = requests.get(url, params=params, headers=HEADERS, timeout=6)
+        res = requests.get(url, params={"searchKey": keyword}, headers=HEADERS, timeout=5)
         if res.status_code == 200:
             events = res.json().get("data", {}).get("events", [])
             for ev in events:
-                # Must be a soccer match and not finished
-                status = ev.get("status", 0)
-                # status 0 = not started, status 1 = in play
-                if status in [0, 1]:
-                    return ev
+                if ev.get("status", 0) in [0, 1]:
+                    return ev.get("eventId"), ev.get("homeTeamName"), ev.get("awayTeamName")
             if events:
-                return events[0]
+                return events[0].get("eventId"), events[0].get("homeTeamName"), events[0].get("awayTeamName")
     except Exception:
         pass
-    return None
+    return None, None, None
 
 
 def map_market_to_sportybet(market_pick):
     """
     Official SportyBet Market & Outcome IDs:
     - 1X2: marketId = 1 (Home = 1, Away = 3)
-    - Double Chance: marketId = 10 (1X = 9, 12 = 10, X2 = 11)
+    - Double Chance: marketId = 10 (1X = 9, X2 = 11)
     - Draw No Bet: marketId = 14 (Home = 1, Away = 3)
     - Over/Under: marketId = 18 (Over = 12, Under = 13)
     """
@@ -85,38 +76,35 @@ def map_market_to_sportybet(market_pick):
 
 def generate_sportybet_code(legs):
     """
-    Builds the booking payload strictly from matches verified on SportyBet's live board.
+    Books the ticket directly to SportyBet's /orders/share API.
     """
     if not legs:
-        return None, "No matches provided in slip.", []
+        return None, "No matches selected.", []
 
     sporty_outcomes = []
     booked_teams = []
-    skipped_teams = []
 
     for leg in legs:
+        event_id = leg.get("match_id", "")
         home_team = leg.get("home_team", "")
         away_team = leg.get("away_team", "")
-        
-        # 1. Search by Home team
-        event = search_sportybet_event(home_team)
-        # 2. If not found, try searching by Away team
-        if not event:
-            event = search_sportybet_event(away_team)
 
-        if not event:
-            skipped_teams.append(f"{home_team} vs {away_team}")
-            continue
+        # If ID is not a direct SportyBet sr:match ID, search live board
+        if not str(event_id).startswith("sr:match:"):
+            found_id, h_live, a_live = search_live_event_id(home_team)
+            if not found_id:
+                found_id, h_live, a_live = search_live_event_id(away_team)
+            if found_id:
+                event_id = found_id
+                home_team = h_live or home_team
+                away_team = a_live or away_team
 
-        event_id = event.get("eventId")
-        if not event_id:
-            skipped_teams.append(f"{home_team} vs {away_team}")
+        if not str(event_id).startswith("sr:match:"):
             continue
 
         m_info = map_market_to_sportybet(leg.get("market_pick", ""))
-
         item = {
-            "eventId": event_id,
+            "eventId": str(event_id),
             "marketId": m_info["marketId"],
             "outcomeId": m_info["outcomeId"]
         }
@@ -124,17 +112,11 @@ def generate_sportybet_code(legs):
             item["specifier"] = m_info["specifier"]
 
         sporty_outcomes.append(item)
-        h_name = event.get("homeTeamName", home_team)
-        a_name = event.get("awayTeamName", away_team)
-        booked_teams.append(f"{h_name} vs {a_name} ➔ {leg.get('market_pick')}")
+        booked_teams.append(f"{home_team} vs {away_team} ({leg.get('market_pick')})")
 
     if not sporty_outcomes:
-        msg = "SportyBet could not find these games on today's active schedule."
-        if skipped_teams:
-            msg += f" Missing on SportyBet: {', '.join(skipped_teams[:3])}"
-        return None, msg, []
+        return None, "Selected matches could not be matched with SportyBet's live IDs. Click 'Purge Stale Fixtures' in the sidebar to refresh.", []
 
-    # Send to SportyBet's official /orders/share endpoint
     url = f"{SPORTYBET_API_BASE}/orders/share"
     try:
         res = requests.post(url, headers=HEADERS, json={"outcomes": sporty_outcomes}, timeout=8)
@@ -146,8 +128,8 @@ def generate_sportybet_code(legs):
             else:
                 return None, data.get("message", "SportyBet rejected the selection parameters."), booked_teams
         elif res.status_code == 403:
-            return None, "SportyBet rate limit / Cloudflare challenge. Wait 20 seconds and click again.", booked_teams
+            return None, "SportyBet rate limit. Wait 20 seconds and click again.", booked_teams
         else:
-            return None, f"SportyBet server HTTP error {res.status_code}", booked_teams
+            return None, f"SportyBet server error HTTP {res.status_code}", booked_teams
     except Exception as e:
-        return None, f"Network timeout connecting to SportyBet: {str(e)}", booked_teams
+        return None, f"Network timeout: {str(e)}", booked_teams
